@@ -24,6 +24,7 @@ from pool import ProxyPool
 from router import Router, RouteContext
 from rtk import RTK
 from _http_raw import handle_tunnel, handle_http
+from reverse_proxy import handle_reverse_proxy
 
 logger = structlog.get_logger(__name__)
 
@@ -210,6 +211,16 @@ class ProxyServer:
                     if hdr in (b"\r\n", b"\n", b""):
                         break
                 await self._raw_api_log_get(rd, wr, line)
+                return
+
+            # Reverse proxy: /proxy/{provider}/... — plaintext body inspection
+            elif request_path_only.startswith("/proxy/"):
+                self._request_count += 1
+                await handle_reverse_proxy(
+                    method, request_path, rd, wr, self._upstream_session,
+                    db=self._db, source_ip=source_ip, pool=self._pool,
+                    config=self._config,
+                )
                 return
 
             # CONNECT tunnel — drain remaining headers first

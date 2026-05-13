@@ -59,8 +59,6 @@ WG_HOST_MAP: dict[str, str] = {
     "10.66.0.5": "pi2",
     "10.66.0.6": "vibe",
     "10.66.0.7": "hoster",
-    "127.0.0.1": "hoster",
-    "::1":       "hoster",
 }
 
 # Target host → LLM provider name
@@ -74,8 +72,28 @@ LLM_PROVIDER_MAP: dict[str, str] = {
 }
 
 
+def _local_wg_hostname() -> str:
+    """Return human hostname for the local WireGuard node."""
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["ip", "-4", "addr", "show", "wg0"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout
+        for part in out.split():
+            wg_ip = part.split("/")[0]
+            if wg_ip in WG_HOST_MAP:
+                return WG_HOST_MAP[wg_ip]
+    except Exception:
+        pass
+    import socket
+    return socket.gethostname()
+
+
 def source_host_from_ip(ip: str) -> str:
     """Map WireGuard IP to host alias. Falls back to the raw IP."""
+    if ip in ("127.0.0.1", "::1", ""):
+        return _local_wg_hostname()
     return WG_HOST_MAP.get(ip, ip)
 
 
