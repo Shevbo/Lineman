@@ -1,0 +1,210 @@
+{
+  "services": [
+    {
+      "id": "deepseek-flash",
+      "name": "DeepSeek Flash",
+      "type": "deepseek",
+      "model": "deepseek-v4-flash",
+      "base_url": "https://api.deepseek.com",
+      "health_endpoint": "/v1/models",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "openclaw_config_path": "",
+      "timeout": 15,
+      "interval": 60,
+      "proxy": null
+    },
+    {
+      "id": "deepseek-pro",
+      "name": "DeepSeek Pro",
+      "type": "deepseek",
+      "model": "deepseek-v4-pro",
+      "base_url": "https://api.deepseek.com",
+      "health_endpoint": "/v1/models",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "openclaw_config_path": "",
+      "timeout": 15,
+      "interval": 60,
+      "proxy": null
+    },
+    {
+      "id": "gemini-flash",
+      "name": "Gemini Flash",
+      "type": "gemini",
+      "model": "gemini-2.5-flash",
+      "base_url": "https://gemini-proxy-worker.bshevelev75.workers.dev",
+      "health_endpoint": "/v1beta/models",
+      "api_key_env": "GEMINI_API_KEY",
+      "openclaw_config_path": "",
+      "timeout": 15,
+      "interval": 60,
+      "proxy": false
+    },
+    {
+      "id": "gemini-pro",
+      "name": "Gemini Pro",
+      "type": "gemini",
+      "model": "gemini-3.1-pro-preview",
+      "base_url": "https://gemini-proxy-worker.bshevelev75.workers.dev",
+      "health_endpoint": "/v1beta/models",
+      "api_key_env": "GEMINI_API_KEY",
+      "openclaw_config_path": "",
+      "timeout": 15,
+      "interval": 60,
+      "proxy": false
+    },
+    {
+      "id": "google-drive",
+      "name": "Google Drive",
+      "type": "google_drive",
+      "base_url": "https://www.googleapis.com",
+      "health_endpoint": "/drive/v3/files",
+      "timeout": 10,
+      "interval": 120,
+      "proxy": true
+    },
+    {
+      "id": "google-gmail",
+      "name": "Google Gmail",
+      "type": "google_gmail",
+      "base_url": "https://gmail.googleapis.com",
+      "health_endpoint": "/gmail/v1/users/me/profile",
+      "timeout": 10,
+      "interval": 120,
+      "proxy": true
+    },
+    {
+      "id": "google-calendar",
+      "name": "Google Calendar",
+      "type": "google_calendar",
+      "base_url": "https://www.googleapis.com",
+      "health_endpoint": "/calendar/v3/calendars/primary",
+      "timeout": 10,
+      "interval": 120,
+      "proxy": true
+    },
+    {
+      "id": "telegram",
+      "name": "Telegram API",
+      "type": "telegram",
+      "base_url": "https://api.telegram.org",
+      "health_endpoint_prefix": "/bot",
+      "api_key_env": "TELEGRAM_BOT_TOKEN",
+      "openclaw_config_path": "",
+      "timeout": 10,
+      "interval": 60,
+      "proxy": false,
+      "use_proxy6": false
+    }
+  ],
+  "routing": {
+    "default": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash"
+    },
+    "think": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro"
+    },
+    "background": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash"
+    },
+    "longContext": {
+      "provider": "gemini",
+      "model": "gemini-3.1-pro-preview"
+    },
+    "longContextThreshold": 60000,
+    "webSearch": {
+      "provider": "gemini",
+      "model": "gemini-2.5-flash"
+    }
+  },
+  "proxy_server": {
+    "host": "127.0.0.1",
+    "port": 9090,
+    "max_connections": 100,
+    "request_timeout": 120
+  },
+  "analytics": {
+    "claude_logs_path": "~/.claude/projects/-shectory-work-/",
+    "enabled": true
+  },
+  "rtk": {
+    "binary_path": "~/.local/bin/rtk",
+    "enabled": true
+  },
+  "global": {
+    "check_interval_fast": 60,
+    "check_interval_slow": 120,
+    "deep_probe_every_n": 5,
+    "down_threshold": 3,
+    "latency_multiplier": 2.0,
+    "proxy_url": "http://g3FLjE:v5aJS3@45.155.200.232:8000",
+    "gemini_cf_proxy_url": "https://gemini-proxy-worker.bshevelev75.workers.dev",
+    "proxy6_url": "",
+    "gateway_log_pattern": "/tmp/openclaw/openclaw-*.log",
+    "google_drive_folder": "1_4Yk7kpSs8FTNxbP4w0V1o301Vqa6mRa",
+    "report_time": "23:59",
+    "state_file": "state.json",
+    "metrics_file": "metrics.json"
+  },
+  "proxy_pool": {
+    "proxies": [
+      {
+        "id": "proxy1",
+        "name": "Datacenter 45.155.200.232",
+        "url": "http://g3FLjE:v5aJS3@45.155.200.232:8000",
+        "priority": 1,
+        "enabled": true
+      },
+      {
+        "id": "iproyal",
+        "name": "iProyal Residential",
+        "url": "",
+        "priority": 2,
+        "enabled": false,
+        "_comment": "Add url=http://USER:PASS@geo.iproyal.com:12321 and enabled=true to activate"
+      }
+    ],
+    "routes": [
+      {
+        "comment": "Google APIs and Telegram need a proxy from Russia",
+        "hosts": [
+          "*.googleapis.com",
+          "www.googleapis.com",
+          "gmail.googleapis.com",
+          "docs.googleapis.com",
+          "api.telegram.org"
+        ],
+        "proxies": [
+          "proxy1",
+          "iproyal"
+        ]
+      },
+      {
+        "comment": "LLM APIs: direct from smain",
+        "hosts": [
+          "api.deepseek.com",
+          "api.anthropic.com",
+          "api.openai.com",
+          "api.cohere.com"
+        ],
+        "proxies": []
+      },
+      {
+        "comment": "CF Worker: direct",
+        "hosts": [
+          "*.workers.dev"
+        ],
+        "proxies": []
+      },
+      {
+        "comment": "Default: direct",
+        "hosts": [
+          "*"
+        ],
+        "proxies": []
+      }
+    ]
+  }
+}

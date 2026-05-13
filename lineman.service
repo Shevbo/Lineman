@@ -1,0 +1,19 @@
+[Unit]
+Description=Lineman v2 — умный API-шлюз + мониторинг качества связи
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash %h/workspaces/lineman/run-lineman.sh
+WorkingDirectory=%h/workspaces/lineman
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lineman
+
+Environment="PATH=%h/.nvm/versions/node/v22.22.2/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+[Install]
+WantedBy=default.target
