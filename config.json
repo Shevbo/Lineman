@@ -120,13 +120,13 @@
     }
   },
   "proxy_server": {
-    "host": "127.0.0.1",
+    "host": "10.66.0.1",
     "port": 9090,
     "max_connections": 100,
     "request_timeout": 120
   },
   "analytics": {
-    "claude_logs_path": "~/.claude/projects/-shectory-work-/",
+    "claude_logs_path": "~/.claude/projects/",
     "enabled": true
   },
   "rtk": {
@@ -156,22 +156,93 @@
       "openai": "https://api.openai.com"
     }
   },
+  "agents": {
+    "node_map": {
+      "smain": [
+        "main",
+        "selfcoder",
+        "qaper",
+        "virtual-boris",
+        "titan",
+        "nurse",
+        "guilya",
+        "jobsearch-scanner",
+        "resume-editor",
+        "interview-coach",
+        "inbox"
+      ]
+    }
+  },
+  "federation": {
+    "local_node": "smain",
+    "nodes": [],
+    "node_agents": {
+      "sdev": [
+        {
+          "id": "main",
+          "name": "TankDev",
+          "emoji": "🛠️"
+        },
+        {
+          "id": "selfcoder",
+          "name": "Selfcoder",
+          "emoji": "⚡"
+        },
+        {
+          "id": "qaper",
+          "name": "QAper",
+          "emoji": "🔍"
+        }
+      ],
+      "hoster": [
+        {
+          "id": "main",
+          "name": "Hoster",
+          "emoji": "🏠"
+        },
+        {
+          "id": "shopin",
+          "name": "Shopin",
+          "emoji": "🛒"
+        },
+        {
+          "id": "inbox",
+          "name": "Inbox",
+          "emoji": "📥"
+        }
+      ],
+      "vibe": [
+        {
+          "id": "virtual-boris",
+          "name": "VBoris2",
+          "emoji": "🧠"
+        },
+        {
+          "id": "inbox",
+          "name": "Inbox",
+          "emoji": "📥"
+        }
+      ],
+      "cloud": [],
+      "pi": [],
+      "pi2": []
+    }
+  },
   "proxy_pool": {
     "proxies": [
       {
         "id": "proxy1",
         "name": "Datacenter 45.155.200.232",
         "url": "http://g3FLjE:v5aJS3@45.155.200.232:8000",
-        "priority": 1,
+        "priority": 3,
         "enabled": true
       },
       {
         "id": "iproyal",
         "name": "iProyal Residential",
-        "url": "",
-        "priority": 2,
-        "enabled": false,
-        "_comment": "Add url=http://USER:PASS@geo.iproyal.com:12321 and enabled=true to activate"
+        "url": "http://14aa906033b2c:2413679fc5@86.109.80.236:12323",
+        "priority": 1,
+        "enabled": true
       }
     ],
     "routes": [
