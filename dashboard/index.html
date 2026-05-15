@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shectory Federation</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0d1117; color: #e6edf3;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+}
+
+/* ── HEADER ── */
+#header {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 7px 14px; background: #161b22;
+  border-bottom: 1px solid #30363d; flex-shrink: 0;
+}
+#header h1 { font-size: 13px; font-weight: 700; letter-spacing:.06em; color:#58a6ff; }
+.badge { background:#21262d; border:1px solid #30363d; border-radius:5px; padding:2px 8px; font-size:11px; color:#8b949e; }
+.badge b { color:#e6edf3; }
+#pulse { width:8px; height:8px; border-radius:50%; background:#3fb950; box-shadow:0 0 6px #3fb950; animation:blink 2.5s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+#node-status { font-size:11px; color:#8b949e; }
+#ts-upd { font-size:10px; color:#484f58; }
+#legend { display:flex; gap:7px; align-items:center; }
+.lg { display:flex; align-items:center; gap:3px; font-size:10px; color:#8b949e; }
+.lg-dot { width:8px; height:8px; border-radius:50%; }
+#btn-report {
+  margin-left:auto;
+  background:#21262d; border:1px solid #30363d; border-radius:5px;
+  color:#8b949e; font-size:11px; padding:3px 10px; cursor:pointer;
+}
+#btn-report:hover { background:#2d333b; color:#e6edf3; border-color:#58a6ff; }
+
+/* ── MAIN ROW ── */
+#main-row {
+  flex: 1; display: flex; overflow: hidden; min-height: 0;
+}
+
+/* ── LEFT PANEL ── */
+#left-panel {
+  width: 210px; flex-shrink: 0;
+  border-right: 1px solid #1a2030;
+  overflow-y: auto; overflow-x: hidden;
+  padding: 10px 8px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+#left-panel::-webkit-scrollbar { width:4px; }
+#left-panel::-webkit-scrollbar-track { background:transparent; }
+#left-panel::-webkit-scrollbar-thumb { background:#30363d; border-radius:2px; }
+
+.lp-section { }
+.lp-title {
+  font-size:9px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+  color:#484f58; padding-bottom:5px; border-bottom:1px solid #1a2030; margin-bottom:7px;
+}
+.lp-mode {
+  display:flex; align-items:center; gap:6px;
+  padding:5px 8px; border-radius:5px; margin-bottom:8px;
+  font-size:11px; font-weight:600;
+}
+.lp-mode.on  { background:#0e2318; border:1px solid #1a4027; color:#3fb950; }
+.lp-mode.off { background:#2a0f0f; border:1px solid #4a1a1a; color:#f85149; }
+
+.rt-row {
+  display:grid; grid-template-columns:auto 1fr;
+  gap:2px 6px; padding:5px 0; border-bottom:1px solid #1a2030; font-size:10px;
+}
+.rt-row:last-child { border-bottom:none; }
+.rt-rule { color:#8b949e; }
+.rt-cond { color:#484f58; font-size:9px; }
+.rt-prov { color:#e3b341; font-weight:600; }
+.rt-model { color:#484f58; font-size:9px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+.algo-text {
+  font-size:10px; color:#8b949e; line-height:1.6;
+}
+.algo-text b { color:#e6edf3; }
+
+/* ── TOPOLOGY ── */
+#topo-wrap { flex:1; position:relative; overflow:hidden; min-width:0; }
+#topo { width:100%; height:100%; }
+
+.line-bg   { stroke:#1a2030; stroke-width:1.2; fill:none; }
+.line-main { stroke:#1e2840; stroke-width:1.8; fill:none; }
+.line-agent{ stroke:#1a2030; stroke-width:.8; fill:none; stroke-dasharray:3,4; }
+
+.svc-circle   { fill:#161b22; stroke:#2d333b; stroke-width:1.5; }
+.hub-circle   { fill:#0b2558; stroke:#58a6ff; stroke-width:2.2; }
+.node-circle  { fill:#0d1117; stroke:#2d333b; stroke-width:1.4; }
+.agent-circle { fill:#161b22; stroke:#2d333b; stroke-width:1.2; cursor:pointer; }
+.agent-circle:hover { stroke:#58a6ff; fill:#1c2128; }
+
+.t-label { font-size:11px; fill:#e6edf3; text-anchor:middle; pointer-events:none; }
+.t-sub   { font-size:9.5px; fill:#8b949e; text-anchor:middle; pointer-events:none; }
+.t-hub   { font-size:9px; fill:#58a6ff; text-anchor:middle; font-weight:600; letter-spacing:.06em; pointer-events:none; }
+
+.sd-ok      { fill:#3fb950; }
+.sd-down    { fill:#f85149; }
+.sd-degraded{ fill:#e3b341; }
+.sd-unknown { fill:#484f58; }
+
+/* ── LOG STRIP (bottom) ── */
+#logstrip {
+  height:34px; background:#0d1117; border-top:1px solid #1a2030;
+  display:flex; align-items:center; padding:0 10px; flex-shrink:0; gap:6px; overflow:hidden;
+}
+#log-title { font-size:9px; color:#484f58; flex-shrink:0; letter-spacing:.06em; }
+#log-inner { display:flex; gap:0; align-items:center; overflow:hidden; flex:1; }
+.le {
+  display:flex; align-items:center; gap:4px; padding:0 8px;
+  border-right:1px solid #1a2030; font-size:10px; white-space:nowrap; flex-shrink:0;
+}
+.le:last-child { border-right:none; }
+.lb { border-radius:3px; padding:1px 5px; font-size:9px; font-weight:700; }
+.lb-prompt   { background:#1a2f55; color:#58a6ff; }
+.lb-response { background:#1a2f23; color:#3fb950; }
+.lb-error    { background:#3d1515; color:#f85149; }
+.lb-tool_call{ background:#2e2500; color:#e3b341; }
+.lb-message  { background:#251535; color:#a371f7; }
+.lb-success  { background:#1a2f23; color:#3fb950; }
+.lb-document { background:#2e1800; color:#f0883e; }
+.lb-image    { background:#2d0f20; color:#f778ba; }
+.lb-agent_msg{ background:#1e1535; color:#a855f7; }
+.l-rt { color:#8b949e; }
+.l-tk { color:#484f58; }
+.l-lt { color:#484f58; }
+.l-ag { color:#30363d; font-size:9px; }
+
+/* ── RIGHT PANEL: PACKET LOG ── */
+#right-panel {
+  width: 310px; flex-shrink: 0;
+  border-left: 1px solid #1a2030;
+  display: flex; flex-direction: column; min-height: 0;
+}
+#pkt-header {
+  display:flex; align-items:center; gap:6px;
+  padding:6px 10px; background:#0d1117; border-bottom:1px solid #1a2030;
+  flex-shrink:0;
+}
+#pkt-title { font-size:10px; font-weight:700; color:#58a6ff; letter-spacing:.06em; flex:1; }
+#pkt-count { font-size:9px; color:#484f58; }
+#btn-pause {
+  background:#21262d; border:1px solid #30363d; border-radius:4px;
+  color:#8b949e; font-size:10px; padding:2px 8px; cursor:pointer; flex-shrink:0;
+}
+#btn-pause.paused { background:#2a1f00; border-color:#6a4f00; color:#e3b341; }
+#btn-pause:hover { color:#e6edf3; }
+#btn-copy {
+  background:#21262d; border:1px solid #30363d; border-radius:4px;
+  color:#8b949e; font-size:10px; padding:2px 7px; cursor:pointer; flex-shrink:0;
+}
+#btn-copy:hover { color:#e6edf3; }
+
+#pkt-cols {
+  display:grid;
+  grid-template-columns: 60px 1fr 1fr 60px;
+  gap:0; padding:3px 6px;
+  background:#0d1117; border-bottom:1px solid #1a2030;
+  flex-shrink:0;
+}
+.pkt-col-hd {
+  font-size:8px; font-weight:700; color:#484f58;
+  letter-spacing:.08em; text-transform:uppercase; padding:1px 2px;
+}
+
+#pkt-body {
+  flex:1; overflow-y:auto; overflow-x:hidden;
+  font-size:10px; line-height:1.35;
+}
+#pkt-body::-webkit-scrollbar { width:4px; }
+#pkt-body::-webkit-scrollbar-track { background:transparent; }
+#pkt-body::-webkit-scrollbar-thumb { background:#30363d; border-radius:2px; }
+
+.pkt-row {
+  display:grid;
+  grid-template-columns: 60px 1fr 1fr 60px;
+  gap:0; padding:2px 6px;
+  border-bottom:1px solid #0f1117;
+  cursor:default;
+}
+.pkt-row:hover { background:#161b22; }
+.pkt-from { color:#c9d1d9; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 2px; }
+.pkt-to   { color:#8b949e;  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 2px; }
+.pkt-ts   { color:#484f58;  white-space:nowrap; padding:0 2px; }
+.pkt-type { padding:0 2px; }
+.pkt-snippet {
+  grid-column: 1 / -1;
+  font-size:9px; color:#484f58; font-style:italic;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  padding:0 4px 3px; border-top:1px solid #0f1117;
+}
+
+/* ── SHARED MODALS ── */
+.modal-overlay {
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,.72);
+  z-index:100; justify-content:center; align-items:center;
+}
+.modal-overlay.open { display:flex; }
+.modal-box {
+  background:#161b22; border:1px solid #30363d; border-radius:10px;
+  position:relative;
+}
+.modal-close {
+  position:absolute; top:12px; right:12px; background:none;
+  border:1px solid #30363d; color:#8b949e; cursor:pointer;
+  border-radius:5px; padding:2px 8px; font-size:11px;
+}
+.modal-close:hover { background:#21262d; color:#e6edf3; }
+
+/* agent modal */
+#moverlay #mbox { width:480px; max-height:78vh; overflow-y:auto; padding:20px 22px; }
+#mbox h2 { font-size:16px; margin-bottom:4px; }
+.mmeta { font-size:11px; color:#8b949e; margin-bottom:10px; display:flex; gap:12px; }
+.mdesc { font-size:11px; color:#c9d1d9; background:#0d1117; padding:8px 12px; border-radius:5px; margin-bottom:12px; max-height:65px; overflow-y:auto; line-height:1.5; }
+#mbox h3 { font-size:11px; color:#8b949e; margin-bottom:6px; }
+#mhist { list-style:none; }
+#mhist li { display:flex; gap:6px; align-items:center; padding:3px 0; border-bottom:1px solid #1c2128; font-size:10px; }
+#mhist li:last-child { border-bottom:none; }
+.mhd { width:12px; text-align:center; }
+.mhs { color:#58a6ff; min-width:75px; }
+.mhk { color:#8b949e; min-width:65px; }
+.mhl { color:#8b949e; min-width:48px; }
+.mha { color:#484f58; font-size:9px; }
+
+/* report modal */
+#roverlay #rbox { width:700px; max-height:82vh; overflow-y:auto; padding:22px 26px; }
+#rbox h2 { font-size:15px; margin-bottom:5px; }
+.rsub { font-size:11px; color:#8b949e; margin-bottom:16px; }
+.rtotal-row { display:flex; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
+.rtotal-card { flex:1; min-width:120px; background:#0d1117; border:1px solid #21262d; border-radius:7px; padding:10px 14px; }
+.rtotal-card .rc-label { font-size:9px; color:#8b949e; margin-bottom:3px; }
+.rtotal-card .rc-val   { font-size:20px; font-weight:700; }
+.rc-saved  { color:#3fb950; } .rc-actual { color:#58a6ff; }
+.rc-claude { color:#f85149; } .rc-pct    { color:#e3b341; }
+#r-table { width:100%; border-collapse:collapse; font-size:11px; }
+#r-table th { text-align:left; padding:5px 8px; font-size:9px; font-weight:600; color:#8b949e; border-bottom:1px solid #21262d; text-transform:uppercase; letter-spacing:.05em; }
+#r-table td { padding:6px 8px; border-bottom:1px solid #161b22; }
+#r-table tr:last-child td { border-bottom:none; }
+#r-table tr:hover td { background:#1c2128; }
+.r-model { color:#e6edf3; font-weight:500; }
+.r-calls { color:#8b949e; text-align:right; }
+.r-tkn   { color:#8b949e; text-align:right; font-size:10px; }
+.r-cost  { color:#58a6ff; text-align:right; }
+.r-base  { color:#f85149; text-align:right; opacity:.7; }
+.r-saved { color:#3fb950; text-align:right; font-weight:600; }
+.r-pct   { text-align:right; font-weight:700; }
+.pct-bar { display:inline-block; height:6px; border-radius:3px; background:linear-gradient(90deg,#3fb950,#2ea043); vertical-align:middle; margin-right:4px; }
+#r-footer { margin-top:12px; font-size:9px; color:#484f58; text-align:center; border-top:1px solid #1a2030; padding-top:8px; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>🚦 SHECTORY FEDERATION</h1>
+  <div class="badge">tkn today <b id="s-tkn">—</b></div>
+  <div class="badge">calls <b id="s-calls">—</b></div>
+  <div class="badge">req <b id="s-req">—</b></div>
+  <div id="pulse"></div>
+  <span id="node-status">—</span>
+  <div id="legend">
+    <span class="lg"><span class="lg-dot" style="background:#3b82f6"></span>prompt</span>
+    <span class="lg"><span class="lg-dot" style="background:#22c55e"></span>response</span>
+    <span class="lg"><span class="lg-dot" style="background:#ef4444"></span>error</span>
+    <span class="lg"><span class="lg-dot" style="background:#eab308"></span>tool</span>
+    <span class="lg"><span class="lg-dot" style="background:#a855f7"></span>msg</span>
+    <span class="lg"><span class="lg-dot" style="background:#ec4899"></span>img</span>
+    <span class="lg"><span class="lg-dot" style="background:#06b6d4"></span>agent↔agent</span>
+  </div>
+  <span id="ts-upd">—</span>
+  <button id="btn-report" onclick="openReport()">📊 Отчёт</button>
+</div>
+
+<div id="main-row">
+
+  <!-- LEFT PANEL: routing -->
+  <div id="left-panel">
+    <div class="lp-section">
+      <div class="lp-title">Lineman Proxy</div>
+      <div id="lp-mode" class="lp-mode on">⚡ ON — через 9090</div>
+    </div>
+
+    <div class="lp-section">
+      <div class="lp-title">Маршрутизация</div>
+      <div id="rt-table"></div>
+    </div>
+
+    <div class="lp-section">
+      <div class="lp-title">Алгоритм</div>
+      <div class="algo-text" id="algo-desc">
+        <b>Умная маршрутизация</b> выбирает модель по сложности запроса:<br><br>
+        • <b>Длинный контекст</b> (&gt;60k токенов) → Gemini Pro — большое окно<br><br>
+        • <b>Размышление</b> (режим think) → DeepSeek Pro — цепочка рассуждений<br><br>
+        • <b>Веб-поиск</b> → Gemini Flash — встроенный поиск Google<br><br>
+        • <b>Фоновые задачи</b> (cron, delivery) → Flash — скорость &gt; качество<br><br>
+        • <b>По умолчанию</b> → DeepSeek Flash — оптимум цена/качество
+      </div>
+    </div>
+
+    <div class="lp-section">
+      <div class="lp-title">Fallback цепочки</div>
+      <div id="rt-fallbacks" style="font-size:9px;color:#6e7681;line-height:1.8">—</div>
+    </div>
+
+    <div class="lp-section">
+      <div class="lp-title">Последние решения</div>
+      <div id="rt-decisions" style="font-size:9px;color:#8b949e">—</div>
+    </div>
+  </div>
+
+  <!-- CENTER: topology -->
+  <div id="topo-wrap">
+    <svg id="topo" viewBox="0 0 1100 490" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <filter id="fg-blue"  x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <filter id="fg-green" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3"   result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <filter id="fg-red"   x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="4.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <filter id="fg-yel"   x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3"   result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <filter id="fg-pur"   x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3"   result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <filter id="fg-cyan"  x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+      <g id="cl"></g>
+      <g id="nl"></g>
+      <g id="pl"></g>
+    </svg>
+  </div>
+
+  <!-- RIGHT PANEL: packet log -->
+  <div id="right-panel">
+    <div id="pkt-header">
+      <span id="pkt-title">📡 PACKET LOG</span>
+      <span id="pkt-count">0</span>
+      <button id="btn-pause" onclick="togglePause()">⏸ Пауза</button>
+      <button id="btn-copy"  onclick="copyLog()">📋</button>
+    </div>
+    <div id="pkt-cols">
+      <span class="pkt-col-hd">От</span>
+      <span class="pkt-col-hd">Кому</span>
+      <span class="pkt-col-hd">Дата / Время</span>
+      <span class="pkt-col-hd">Тип</span>
+    </div>
+    <div id="pkt-body"></div>
+  </div>
+
+</div>
+
+<!-- log strip -->
+<div id="logstrip">
+  <span id="log-title">SIGNALS</span>
+  <div id="log-inner"><span style="color:#484f58;font-size:10px">waiting for signals…</span></div>
+</div>
+
+<!-- Agent modal -->
+<div id="moverlay" class="modal-overlay">
+  <div id="mbox" class="modal-box">
+    <button class="modal-close" onclick="closeM()">✕</button>
+    <h2 id="m-title"></h2>
+    <div class="mmeta"><span id="m-node"></span><span id="m-model"></span></div>
+    <div class="mdesc" id="m-desc"></div>
+    <h3>Last 20 signals</h3>
+    <ul id="mhist"></ul>
+  </div>
+</div>
+
+<!-- Report modal -->
+<div id="roverlay" class="modal-overlay">
+  <div id="rbox" class="modal-box">
+    <button class="modal-close" onclick="closeReport()">✕</button>
+    <h2>📊 Отчёт по экономии токенов</h2>
+    <div class="rsub">Сравнение с Claude Sonnet ($3/$15 per 1M tkn)</div>
+    <div id="r-period" style="display:flex;gap:8px;align-items:center;margin:8px 0;font-size:10px;color:#8b949e;">
+      <span>Период:</span>
+      <input type="date" id="r-since" style="background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:2px 6px;border-radius:4px;font-size:10px">
+      <span>—</span>
+      <input type="date" id="r-until" style="background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:2px 6px;border-radius:4px;font-size:10px">
+      <button onclick="loadReport()" style="background:#21262d;border:1px solid #30363d;color:#e6edf3;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px">Показать</button>
+      <button onclick="clearReportFilter()" style="background:none;border:none;color:#484f58;cursor:pointer;font-size:10px">Сбросить</button>
+    </div>
+    <div class="rtotal-row" id="r-totals"></div>
+    <table id="r-table">
+      <thead><tr>
+        <th>Модель</th><th style="text-align:right">Запросов</th>
+        <th style="text-align:right">Токенов (in/out)</th><th style="text-align:right">Факт, $</th>
+        <th style="text-align:right">Claude, $</th><th style="text-align:right">Сэкономлено, $</th>
+        <th style="text-align:right">Экономия</th>
+      </tr></thead>
+      <tbody id="r-tbody"></tbody>
+    </table>
+    <div id="r-footer">Базовая линия: Claude Sonnet 4 · $3.00/1M input · $15.00/1M output</div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════ LAYOUT CONSTANTS ═══
+const HUB = { x:550, y:178 };
+const AGENT_R = 16;
+
+const SVCS = {
+  deepseek: { x:90,   y:50, label:'DeepSeek', emoji:'☁️' },
+  gemini:   { x:270,  y:50, label:'Gemini',   emoji:'☁️' },
+  telegram: { x:450,  y:50, label:'Telegram', emoji:'📱' },
+  openai:   { x:630,  y:50, label:'OpenAI',   emoji:'☁️' },
+  google:   { x:810,  y:50, label:'Google',   emoji:'📧' },
+  github:   { x:990,  y:50, label:'GitHub',   emoji:'🐙' },
+};
+
+const WG_NODES = [
+  { id:'pi2',    x:65,   y:295, emoji:'🍓', r:17 },
+  { id:'pi',     x:195,  y:295, emoji:'🍓', r:17 },
+  { id:'vibe',   x:335,  y:295, emoji:'💫', r:18 },
+  { id:'smain',  x:550,  y:295, emoji:'🖥️',  r:22 },
+  { id:'cloud',  x:765,  y:295, emoji:'☁️',  r:17 },
+  { id:'sdev',   x:900,  y:295, emoji:'💻', r:18 },
+  { id:'hoster', x:1035, y:295, emoji:'🌐', r:18 },
+];
+const NODE_POS = Object.fromEntries(WG_NODES.map(n => [n.id, n]));
+
+// Signal styling — distinct shapes/sizes per type
+const SIG = {
+  prompt:    { c:'#3b82f6', r:6,  f:'fg-blue',  sym:'●' },
+  response:  { c:'#22c55e', r:5,  f:'fg-green', sym:'●' },
+  error:     { c:'#ef4444', r:8,  f:'fg-red',   sym:'✕' },
+  tool_call: { c:'#eab308', r:5,  f:'fg-yel',   sym:'◆' },
+  message:   { c:'#a855f7', r:5,  f:'fg-pur',   sym:'●' },
+  success:   { c:'#22c55e', r:5,  f:'fg-green', sym:'●' },
+  document:  { c:'#f97316', r:5,  f:'fg-yel',   sym:'▪' },
+  image:     { c:'#ec4899', r:6,  f:'fg-pur',   sym:'▪' },
+  agent_msg: { c:'#06b6d4', r:6,  f:'fg-cyan',  sym:'↔' },
+};
+
+// ═══════════════════════════════ STATE ═══
+let nodeData = null;
+let agentPos = {};
+let svcStatus = {};
+let lastTs = 0;
+let logs = [];
+const MAX_LOG = 40;
+let pktLog = [];
+const MAX_PKT_LOG = 9999;
+let pktPaused = false;
+let anim = 0;
+const MAX_ANIM = 24;
+let modalKey = null;
+
+// ═══════════════════════════════ SVG HELPERS ═══
+const $id = id => document.getElementById(id);
+const cl = $id('cl'), nl = $id('nl'), pl = $id('pl');
+
+function el(tag, attrs, text) {
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k,v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+// ═══════════════════════════════ RENDER TOPOLOGY ═══
+function renderTopology(data) {
+  cl.innerHTML = ''; nl.innerHTML = '';
+
+  svcStatus = {};
+  for (const s of data.services || []) svcStatus[s.id] = s.status;
+
+  agentPos = {};
+  for (const nd of data.nodes || []) {
+    const nPos = NODE_POS[nd.id];
+    if (!nPos) continue;
+    const agents = nd.agents || [];
+    if (!agents.length) continue;
+    const STEP = Math.min(44, 480 / Math.max(agents.length, 1));
+    if (nd.id === 'smain' && agents.length > 6) {
+      placeRow(agents.slice(0,6), nPos.x, 410, STEP, nd.id);
+      placeRow(agents.slice(6),   nPos.x, 455, STEP, nd.id);
+    } else {
+      placeRow(agents, nPos.x, 410, STEP, nd.id);
+    }
+  }
+
+  // lines svc→hub
+  for (const sp of Object.values(SVCS))
+    cl.appendChild(el('line',{x1:sp.x,y1:sp.y+22,x2:HUB.x,y2:HUB.y-28,'class':'line-bg'}));
+  // lines hub→nodes
+  for (const nd of WG_NODES)
+    cl.appendChild(el('line',{x1:HUB.x,y1:HUB.y+28,x2:nd.x,y2:nd.y-nd.r,'class':nd.id==='smain'?'line-main':'line-bg'}));
+  // lines node→agents
+  for (const [, ap] of Object.entries(agentPos)) {
+    const nd = NODE_POS[ap.nodeId];
+    if (nd) cl.appendChild(el('line',{x1:nd.x,y1:nd.y+nd.r,x2:ap.x,y2:ap.y-AGENT_R+2,'class':'line-agent'}));
+  }
+
+  // services
+  for (const [id, sp] of Object.entries(SVCS)) {
+    const st = svcStatus[id] || 'unknown';
+    const sc = st==='online'?'sd-ok':st==='down'?'sd-down':st==='degraded'?'sd-degraded':'sd-unknown';
+    const g = el('g',{});
+    g.appendChild(el('circle',{cx:sp.x,cy:sp.y,r:22,'class':'svc-circle'}));
+    g.appendChild(el('circle',{cx:sp.x+15,cy:sp.y-15,r:4,'class':sc}));
+    g.appendChild(el('text',{x:sp.x,y:sp.y+5,'font-size':'13','class':'t-label'},sp.emoji));
+    g.appendChild(el('text',{x:sp.x,y:sp.y+35,'class':'t-sub'},sp.label));
+    nl.appendChild(g);
+  }
+
+  // hub
+  nl.appendChild(el('circle',{cx:HUB.x,cy:HUB.y,r:28,'class':'hub-circle'}));
+  nl.appendChild(el('text',{x:HUB.x,y:HUB.y+6,'font-size':'16','class':'t-label'},'🚦'));
+  nl.appendChild(el('text',{x:HUB.x,y:HUB.y+44,'class':'t-hub'},'LINEMAN'));
+
+  // WG nodes
+  const ndMap = Object.fromEntries((data.nodes||[]).map(n=>[n.id,n]));
+  for (const nd of WG_NODES) {
+    const st = ndMap[nd.id]?.status || 'unknown';
+    const sc = st==='ok'||st==='online'?'sd-ok':st==='down'?'sd-down':st==='degraded'?'sd-degraded':'sd-unknown';
+    const g = el('g',{});
+    g.appendChild(el('circle',{cx:nd.x,cy:nd.y,r:nd.r,'class':'node-circle'}));
+    g.appendChild(el('circle',{cx:nd.x+nd.r-4,cy:nd.y-nd.r+4,r:4,'class':sc}));
+    g.appendChild(el('text',{x:nd.x,y:nd.y+5,'font-size':nd.id==='smain'?'13':'11','class':'t-label'},nd.emoji));
+    g.appendChild(el('text',{x:nd.x,y:nd.y+nd.r+12,'class':'t-sub'},nd.id));
+    nl.appendChild(g);
+  }
+
+  // agents
+  for (const [key, ap] of Object.entries(agentPos)) {
+    const g = el('g',{style:'cursor:pointer'});
+    g.addEventListener('click', () => openM(key));
+    g.appendChild(el('circle',{cx:ap.x,cy:ap.y,r:AGENT_R,'class':'agent-circle'}));
+    g.appendChild(el('text',{x:ap.x,y:ap.y+5,'font-size':'10','class':'t-label'},ap.emoji||'🤖'));
+    g.appendChild(el('text',{x:ap.x,y:ap.y+AGENT_R+11,'class':'t-sub','font-size':'8.5'},ap.name||ap.id));
+    nl.appendChild(g);
+  }
+
+  // header stats
+  const stats  = data.nodes?.[0]?.stats || {};
+  const health = data.nodes?.[0]?.health || {};
+  const tokDay = (stats.tokens_in_today||0) + (stats.tokens_out_today||0);
+  $id('s-tkn').textContent   = fmtN(tokDay);
+  $id('s-calls').textContent = fmtN(stats.calls_today||0);
+  $id('s-req').textContent   = fmtN(health.requests_served||0);
+  $id('node-status').textContent = (data.nodes?.[0]?.id||'smain') + ' ● ' + (health.status||'ok');
+  $id('ts-upd').textContent  = new Date().toLocaleTimeString();
+}
+
+function placeRow(agents, centerX, y, step, nodeId) {
+  const total  = step * (agents.length - 1);
+  const startX = centerX - total / 2;
+  agents.forEach((ag, i) => {
+    agentPos[ag.id + '@' + nodeId] = { ...ag, x: Math.round(startX + i * step), y, nodeId };
+  });
+}
+
+// ═══════════════════════════════ ANIMATION ═══
+function isAgentId(svc) {
+  return !!Object.keys(agentPos).find(k => k.startsWith(svc + '@'));
+}
+
+function mkWaypoints(sig) {
+  const nodeId = sig.from_node || 'smain';
+  const nPos   = NODE_POS[nodeId];
+
+  let aPos = null;
+  if (sig.from_agent) {
+    aPos = agentPos[sig.from_agent + '@' + nodeId]
+        || agentPos[Object.keys(agentPos).find(k => k.startsWith(sig.from_agent + '@')) || ''];
+  }
+
+  const toSvc = sig.to_service || '';
+
+  // Agent-to-agent: destination is a known agent ID
+  if (isAgentId(toSvc)) {
+    const toKey   = Object.keys(agentPos).find(k => k.startsWith(toSvc + '@'));
+    const toAgent = agentPos[toKey];
+    const toNode  = NODE_POS[toAgent?.nodeId];
+    const pts = [];
+    if (aPos) pts.push(aPos);
+    if (nPos) pts.push(nPos);
+    pts.push(HUB);
+    if (toNode && toNode.id !== nodeId) pts.push(toNode);
+    if (toAgent) pts.push(toAgent);
+    return pts.length >= 2 ? pts : null;
+  }
+
+  // Normal: agent → node → hub → service
+  const sPos = SVCS[toSvc] || null;
+  const pts = [];
+  if (aPos)  pts.push(aPos);
+  if (nPos)  pts.push(nPos);
+  pts.push(HUB);
+  if (sPos)  pts.push(sPos);
+  return pts.length >= 2 ? pts : null;
+}
+
+function animPkt(sig) {
+  if (anim >= MAX_ANIM) return;
+  const pts = mkWaypoints(sig);
+  if (!pts) return;
+
+  // Override type for agent-to-agent
+  const type = isAgentId(sig.to_service||'') ? 'agent_msg' : (sig.type || 'prompt');
+  const st = SIG[type] || { c:'#58a6ff', r:6, f:'fg-blue' };
+  anim++;
+
+  const segs = pts.slice(0,-1).map((a,i) => {
+    const b = pts[i+1];
+    const dx=b.x-a.x, dy=b.y-a.y;
+    return { ax:a.x,ay:a.y,bx:b.x,by:b.y, cpx:(a.x+b.x)/2-dy*0.15, cpy:(a.y+b.y)/2+dx*0.15 };
+  });
+
+  const SEG_MS  = 380;
+  const totalMs = segs.length * SEG_MS;
+  const t0 = performance.now();
+  const dot = el('circle',{ r:String(st.r), fill:st.c, filter:`url(#${st.f})`, opacity:'1' });
+  pl.appendChild(dot);
+
+  (function step(now) {
+    const T  = Math.min((now-t0)/totalMs, 1);
+    const sf = T * segs.length;
+    const si = Math.min(Math.floor(sf), segs.length-1);
+    const t  = sf - si;
+    const {ax,ay,bx,by,cpx,cpy} = segs[si];
+    const mt = 1-t;
+    dot.setAttribute('cx', mt*mt*ax + 2*mt*t*cpx + t*t*bx);
+    dot.setAttribute('cy', mt*mt*ay + 2*mt*t*cpy + t*t*by);
+    dot.setAttribute('opacity', T > 0.78 ? String((1-T)/0.22) : '1');
+    if (T < 1) requestAnimationFrame(step);
+    else { dot.remove(); anim--; }
+  })(t0);
+}
+
+// ═══════════════════════════════ LOG STRIP ═══
+function appendLog(sig) {
+  const type   = isAgentId(sig.to_service||'') ? 'agent_msg' : (sig.type || 'prompt');
+  const nodeId = sig.from_node || 'smain';
+  let route;
+  if (sig.from_agent) {
+    const meta = agentPos[sig.from_agent + '@' + nodeId] || {};
+    route = `${meta.emoji||''}${meta.name||sig.from_agent} → ${sig.to_service||'?'}`;
+  } else {
+    route = `${nodeId} → ${sig.to_service||'?'}`;
+  }
+  const tkn = sig.tokens_in  ? fmtN(sig.tokens_in)+'tkn'
+            : sig.tokens_out ? fmtN(sig.tokens_out)+'tkn' : '';
+  const lat = sig.latency_ms ? sig.latency_ms+'ms' : '';
+
+  logs.unshift({ type, route, tkn, lat, ts: sig.ts });
+  if (logs.length > MAX_LOG) logs.pop();
+
+  $id('log-inner').innerHTML =
+    logs.slice(0,8).map(e =>
+      `<span class="le">
+        <span class="lb lb-${e.type}">${e.type}</span>
+        <span class="l-rt">${e.route}</span>
+        ${e.tkn?`<span class="l-tk">${e.tkn}</span>`:''}
+        ${e.lat?`<span class="l-lt">${e.lat}</span>`:''}
+        <span class="l-ag">${fmtAge(e.ts)}</span>
+      </span>`
+    ).join('');
+}
+
+// ═══════════════════════════════ PACKET LOG (right panel) ═══
+function appendPktLog(sig) {
+  const type   = isAgentId(sig.to_service||'') ? 'agent_msg' : (sig.type || 'prompt');
+  const nodeId = sig.from_node || 'smain';
+
+  let fromLabel, toLabel;
+  if (sig.from_agent) {
+    const meta = agentPos[sig.from_agent+'@'+nodeId] || {};
+    fromLabel = (meta.name || sig.from_agent) + '@' + nodeId;
+  } else {
+    fromLabel = nodeId;
+  }
+  toLabel = sig.to_service || '?';
+  if (sig.to_agent) toLabel = sig.to_agent + ' (agent)';
+
+  const tkn = sig.tokens_in  ? '+'+fmtN(sig.tokens_in)
+            : sig.tokens_out ? '+'+fmtN(sig.tokens_out) : '';
+  const lat = sig.latency_ms ? ' '+sig.latency_ms+'ms' : '';
+  const extra = (tkn||lat) ? ` <span style="color:#484f58">${tkn}${lat}</span>` : '';
+
+  const st     = SIG[type] || { c:'#58a6ff', sym:'●' };
+  const tsStr  = fmtDateTime(sig.ts);
+  const snippet = sig.prompt_snippet
+    ? `<div class="pkt-snippet" title="${sig.prompt_snippet.replace(/"/g,'&quot;').replace(/</g,'&lt;')}">${sig.prompt_snippet.slice(0,80).replace(/</g,'&lt;')}${sig.prompt_snippet.length>80?'…':''}</div>`
+    : '';
+
+  pktLog.push({ fromLabel, toLabel, tsStr, type, color: st.c, sym: st.sym, extra, snippet });
+  if (pktLog.length > MAX_PKT_LOG) pktLog.shift();
+
+  $id('pkt-count').textContent = pktLog.length;
+
+  if (!pktPaused) renderPktLog();
+}
+
+function renderPktLog() {
+  const body = $id('pkt-body');
+  const visible = pktLog.slice(-200);
+  body.innerHTML = visible.map(e =>
+    `<div class="pkt-row">
+      <span class="pkt-from" title="${e.fromLabel}">${e.fromLabel}</span>
+      <span class="pkt-to"   title="${e.toLabel}">${e.toLabel}</span>
+      <span class="pkt-ts">${e.tsStr}</span>
+      <span class="pkt-type"><span class="lb lb-${e.type}" style="font-size:8px">${e.type}</span>${e.extra}</span>
+      ${e.snippet||''}
+    </div>`
+  ).join('');
+  body.scrollTop = body.scrollHeight;
+}
+
+function togglePause() {
+  pktPaused = !pktPaused;
+  const btn = $id('btn-pause');
+  if (pktPaused) {
+    btn.textContent = '▶ Продолж.';
+    btn.classList.add('paused');
+  } else {
+    btn.textContent = '⏸ Пауза';
+    btn.classList.remove('paused');
+    renderPktLog();
+  }
+}
+
+function copyLog() {
+  const lines = pktLog.slice(-200).map(e =>
+    `От: ${e.fromLabel}\tКому: ${e.toLabel}\t${e.tsStr}\t${e.type}`
+  ).join('\n');
+  navigator.clipboard.writeText(lines).then(() => {
+    const btn = $id('btn-copy');
+    btn.textContent = '✓';
+    setTimeout(() => btn.textContent = '📋', 1200);
+  });
+}
+
+// ═══════════════════════════════ LEFT PANEL: ROUTING ═══
+async function fetchRouting() {
+  try {
+    const r = await fetch('/api/routing');
+    const d = await r.json();
+
+    // mode badge
+    const modeEl = $id('lp-mode');
+    if (d.lineman_mode) {
+      modeEl.className = 'lp-mode on';
+      modeEl.textContent = '⚡ ON — через 9090';
+    } else {
+      modeEl.className = 'lp-mode off';
+      modeEl.textContent = '🔴 OFF — прямой';
+    }
+
+    // routing table
+    const rows = (d.algorithm || []).map(row => {
+      const modelShort = (row.model||'').replace('deepseek-','').replace('gemini-','').replace('-preview','');
+      return `<div class="rt-row">
+        <span class="rt-rule">${row.rule}</span>
+        <span class="rt-prov">${row.provider}</span>
+        <span class="rt-cond">${row.condition}</span>
+        <span class="rt-model">${modelShort}</span>
+      </div>`;
+    }).join('');
+    $id('rt-table').innerHTML = rows;
+
+    // Fallback chains (static from router.py logic)
+    const chains = {
+      'default':     ['ds-flash','ds-pro','gm-flash'],
+      'think':       ['ds-pro','gm-3.1-pro','gm-flash'],
+      'longContext': ['gm-3.1-pro','ds-pro'],
+      'webSearch':   ['gm-flash','ds-flash'],
+      'background':  ['ds-flash','ds-pro','gm-flash'],
+    };
+    const fbEl = $id('rt-fallbacks');
+    if (fbEl) {
+      fbEl.innerHTML = Object.entries(chains).map(([ctx, chain]) =>
+        `<div><span style="color:#8b949e">${ctx}:</span> ${chain.map((m,i) =>
+          `<span style="color:${i===0?'#e6edf3':'#484f58'}">${m}</span>`
+        ).join(' → ')}</div>`
+      ).join('');
+    }
+  } catch(e) {
+    $id('rt-table').innerHTML = '<div style="color:#484f58;font-size:10px">недоступно</div>';
+  }
+}
+
+// ═══════════════════════════════ LEFT PANEL: DECISIONS ═══
+async function fetchDecisions() {
+  try {
+    const r = await fetch('/api/routing/decisions');
+    const d = await r.json();
+    const el = $id('rt-decisions');
+    if (!d.decisions || !d.decisions.length) {
+      el.innerHTML = '<span style="color:#484f58">нет данных</span>';
+      return;
+    }
+    const CTXCOLOR = {
+      default: '#8b949e', think: '#58a6ff',
+      longContext: '#f97316', webSearch: '#22c55e',
+      background: '#6e7681',
+    };
+    el.innerHTML = d.decisions.slice(0, 15).map(dec => {
+      const col = CTXCOLOR[dec.context] || '#8b949e';
+      const modelShort = (dec.model||'').replace('deepseek-','ds-').replace('gemini-','gm-').replace('-preview','');
+      const snip = dec.snippet ? dec.snippet.slice(0,45).replace(/</g,'&lt;') : '';
+      const age = Math.round(Date.now()/1000 - dec.ts);
+      const ageStr = age < 60 ? age+'s' : age < 3600 ? Math.round(age/60)+'m' : Math.round(age/3600)+'h';
+      return `<div style="margin:2px 0;border-left:2px solid ${col};padding-left:4px;">
+        <span style="color:${col}">${dec.context}</span>
+        → <span style="color:#e6edf3">${modelShort}</span>
+        <span style="color:#484f58;float:right">${ageStr}</span>
+        ${snip?`<div style="color:#484f58;font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${snip}</div>`:''}
+      </div>`;
+    }).join('');
+  } catch(e) {
+    const el2 = $id('rt-decisions');
+    if (el2) el2.innerHTML = '<span style="color:#f85149">недоступно</span>';
+  }
+}
+
+// ═══════════════════════════════ AGENT MODAL ═══
+async function openM(key) {
+  modalKey = key;
+  const [agId, ndId] = key.split('@');
+  const ap = agentPos[key] || {};
+  $id('moverlay').classList.add('open');
+  $id('m-title').textContent  = `${ap.emoji||'🤖'} ${ap.name||agId}`;
+  $id('m-node').textContent   = `node: ${ndId}`;
+  $id('m-model').textContent  = `model: ${ap.model||'—'}`;
+  $id('m-desc').textContent   = ap.description || '—';
+  $id('mhist').innerHTML      = '<li style="color:#484f58;font-size:10px">loading…</li>';
+  try {
+    // Primary: signals (real-time, from signal SDK or reverse proxy with X-Agent-Name)
+    const sigR = await fetch(`/api/signals?agent=${encodeURIComponent(agId)}&node=${encodeURIComponent(ndId)}&limit=20`);
+    const sigs = (await sigR.json()).signals || [];
+    if (sigs.length) { renderMHist(sigs, agId); return; }
+
+    // Fallback: request_log (traffic through reverse proxy with X-Agent-Name header)
+    const logR = await fetch(`/api/log?source_agent=${encodeURIComponent(agId)}&limit=20`);
+    const logRows = (await logR.json()).rows || [];
+    if (logRows.length) { renderMHistFromLog(logRows); return; }
+
+    $id('mhist').innerHTML = '<li style="color:#484f58;font-size:10px">нет активности — агент не виден через reverse proxy (нет X-Agent-Name заголовка)</li>';
+  } catch {
+    $id('mhist').innerHTML = '<li style="color:#f85149">ошибка загрузки</li>';
+  }
+}
+
+function renderMHist(sigs, agId) {
+  const ul = $id('mhist');
+  if (!sigs.length) { ul.innerHTML='<li style="color:#484f58;font-size:10px">нет сигналов</li>'; return; }
+  ul.innerHTML = sigs.map(s => {
+    const dir = s.from_agent === agId ? '↑' : '↓';
+    const svc = s.from_agent === agId ? (s.to_service||'?') : (s.from_node||'?');
+    const col = (SIG[s.type]||{c:'#8b949e'}).c;
+    const tkn = s.tokens_in  ? fmtN(s.tokens_in)+'tkn'
+              : s.tokens_out ? fmtN(s.tokens_out)+'tkn' : '—';
+    const snip = s.prompt_snippet
+      ? `<div style="font-size:8px;color:#484f58;margin-left:14px">${s.prompt_snippet.slice(0,60).replace(/</g,'&lt;')}</div>` : '';
+    return `<li>
+      <span class="mhd" style="color:${col}">${dir}</span>
+      <span class="lb lb-${s.type||'prompt'}">${s.type||'?'}</span>
+      <span class="mhs">${svc}</span>
+      <span class="mhk">${tkn}</span>
+      <span class="mhl">${s.latency_ms||'—'}ms</span>
+      <span class="mha">${fmtAge(s.ts)}</span>
+      ${snip}
+    </li>`;
+  }).join('');
+}
+
+function renderMHistFromLog(rows) {
+  const ul = $id('mhist');
+  ul.innerHTML = rows.map(r => {
+    const tkn = ((r.tokens_in||0) + (r.tokens_out||0));
+    const snippet = r.request_body
+      ? r.request_body.slice(0, 60).replace(/</g,'&lt;') : (r.llm_model || '—');
+    return `<li>
+      <span class="mhd" style="color:#58a6ff">↑</span>
+      <span class="lb lb-prompt">prompt</span>
+      <span class="mhs">${r.llm_provider||'?'}</span>
+      <span class="mhk">${tkn?fmtN(tkn)+'tkn':'—'}</span>
+      <span class="mhl">${r.latency_ms||'—'}ms</span>
+      <span class="mha" title="${r.timestamp}">${r.llm_model||'?'}</span>
+      ${snippet?`<div style="font-size:8px;color:#484f58;margin-left:14px">${snippet}</div>`:''}
+    </li>`;
+  }).join('');
+}
+
+function closeM() { $id('moverlay').classList.remove('open'); modalKey=null; }
+$id('moverlay').addEventListener('click', e => { if(e.target.id==='moverlay') closeM(); });
+
+// ═══════════════════════════════ REPORT MODAL ═══
+async function openReport() {
+  $id('roverlay').classList.add('open');
+  await loadReport();
+}
+
+async function loadReport() {
+  $id('r-totals').innerHTML = '<div style="color:#484f58;font-size:11px;padding:8px">Загружаем…</div>';
+  $id('r-tbody').innerHTML  = '';
+  const sinceEl = $id('r-since');
+  const untilEl = $id('r-until');
+  let url = '/api/report';
+  const params = new URLSearchParams();
+  if (sinceEl && sinceEl.value) params.append('since', sinceEl.value + 'T00:00:00');
+  if (untilEl && untilEl.value) params.append('until', untilEl.value + 'T23:59:59');
+  if (params.toString()) url += '?' + params.toString();
+  try {
+    const r = await fetch(url);
+    renderReport(await r.json());
+  } catch(e) {
+    $id('r-totals').innerHTML = `<div style="color:#f85149;font-size:11px">Ошибка: ${e.message}</div>`;
+  }
+}
+
+function renderReport(d) {
+  $id('r-totals').innerHTML = `
+    <div class="rtotal-card"><div class="rc-label">СЭКОНОМЛЕНО</div><div class="rc-val rc-saved">$${fmtMoney(d.total_saved_usd)}</div></div>
+    <div class="rtotal-card"><div class="rc-label">ЭКОНОМИЯ</div><div class="rc-val rc-pct">${d.total_saved_pct}%</div></div>
+    <div class="rtotal-card"><div class="rc-label">ФАКТИЧЕСКИ</div><div class="rc-val rc-actual">$${fmtMoney(d.total_actual_usd)}</div></div>
+    <div class="rtotal-card"><div class="rc-label">ЕСЛИ БЫ SONNET</div><div class="rc-val rc-claude">$${fmtMoney(d.total_claude_usd)}</div></div>`;
+  $id('r-tbody').innerHTML = (d.rows||[]).map(row => {
+    const barW = Math.round(row.saved_pct * 0.65);
+    const pctColor = row.saved_pct>=90?'#3fb950':row.saved_pct>=60?'#e3b341':'#f85149';
+    return `<tr>
+      <td class="r-model">${row.model}</td>
+      <td class="r-calls">${fmtN(row.calls)}</td>
+      <td class="r-tkn">${fmtN(row.tokens_in)}&nbsp;/&nbsp;${fmtN(row.tokens_out)}</td>
+      <td class="r-cost">$${fmtMoney(row.actual_cost_usd)}</td>
+      <td class="r-base">$${fmtMoney(row.claude_cost_usd)}</td>
+      <td class="r-saved">$${fmtMoney(row.saved_usd)}</td>
+      <td class="r-pct"><span class="pct-bar" style="width:${barW}px;background:${pctColor}"></span><span style="color:${pctColor}">${row.saved_pct}%</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function clearReportFilter() {
+  const s = $id('r-since'); if (s) s.value = '';
+  const u = $id('r-until'); if (u) u.value = '';
+  loadReport();
+}
+function closeReport() { $id('roverlay').classList.remove('open'); }
+$id('roverlay').addEventListener('click', e => { if(e.target.id==='roverlay') closeReport(); });
+
+// ═══════════════════════════════ FETCH ═══
+async function fetchNodes() {
+  try {
+    const r  = await fetch('/api/nodes');
+    nodeData = await r.json();
+    renderTopology(nodeData);
+    const ex = nodeData.nodes?.[0]?.signals||[];
+    if (ex.length) { const mx=Math.max(...ex.map(s=>s.ts||0)); if(mx>lastTs) lastTs=mx; }
+  } catch(e) { console.error('fetchNodes',e); }
+}
+
+async function fetchSigs() {
+  if (!nodeData) return;
+  try {
+    const r    = await fetch(`/api/signals?since=${lastTs}&limit=40`);
+    const data = await r.json();
+    (data.signals||[]).sort((a,b)=>a.ts-b.ts).forEach(s=>{
+      if(s.ts>lastTs) lastTs=s.ts;
+      animPkt(s); appendLog(s); appendPktLog(s);
+    });
+    if (modalKey) openM(modalKey);
+  } catch {}
+}
+
+// ═══════════════════════════════ UTILS ═══
+function fmtN(n) {
+  n=Number(n)||0;
+  if(n>=1e6) return (n/1e6).toFixed(1)+'M';
+  if(n>=1e3) return (n/1e3).toFixed(0)+'k';
+  return String(n);
+}
+function fmtMoney(n) {
+  n=Number(n)||0;
+  if(n>=1000) return n.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+  if(n>=100)  return n.toFixed(1);
+  return n.toFixed(2);
+}
+function fmtAge(ts) {
+  const d=Math.round(Date.now()/1000-ts);
+  if(d<4) return 'now'; if(d<60) return d+'s';
+  if(d<3600) return Math.round(d/60)+'m'; return Math.round(d/3600)+'h';
+}
+function fmtDateTime(ts) {
+  if(!ts) return '—';
+  const d = new Date(ts * 1000);
+  const ymd = d.toLocaleDateString('ru-RU',{year:'2-digit',month:'2-digit',day:'2-digit'});
+  const hms = d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  return `${ymd} ${hms}`;
+}
+
+// ═══════════════════════════════ INIT ═══
+fetchNodes();
+fetchRouting();
+fetchDecisions();
+setInterval(fetchSigs,      3000);
+setInterval(fetchNodes,    30000);
+setInterval(fetchRouting,  60000);
+setInterval(fetchDecisions, 5000);
+</script>
+</body>
+</html>
