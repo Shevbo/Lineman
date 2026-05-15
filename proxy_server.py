@@ -103,6 +103,12 @@ class ProxyServer:
         # DB ref (populated by main.py after RequestLogDB.init())
         self._db: Any = None
 
+        # Signal queue (populated by main.py)
+        self._signals: Any = None
+
+        # Agent metadata dict (populated by main.py)
+        self._agents_meta: dict[str, Any] = {}
+
         # Proxy pool
         self._pool = ProxyPool(self._config.get("proxy_pool", {}))
 
@@ -213,13 +219,40 @@ class ProxyServer:
                 await self._raw_api_log_get(rd, wr, line)
                 return
 
+            # Signal API
+            elif request_path_only == "/api/signal" and method == "POST":
+                await self._raw_api_signal_post(rd, wr, source_ip)
+                return
+            elif request_path_only.startswith("/api/signals"):
+                await self._raw_api_signals(rd, wr, request_path)
+                return
+            elif request_path_only == "/api/nodes":
+                await self._raw_api_nodes(rd, wr, request_path)
+                return
+            elif request_path_only == "/api/report":
+                await self._raw_api_report(rd, wr, request_path)
+                return
+
+            elif request_path_only == "/api/routing":
+                await self._raw_api_routing(wr)
+                return
+
+            elif request_path_only == "/api/routing/decisions":
+                await self._raw_api_routing_decisions(rd, wr)
+                return
+
+            # Dashboard static serve
+            elif request_path_only in ("/dashboard", "/dashboard/"):
+                await self._raw_dashboard(rd, wr)
+                return
+
             # Reverse proxy: /proxy/{provider}/... — plaintext body inspection
             elif request_path_only.startswith("/proxy/"):
                 self._request_count += 1
                 await handle_reverse_proxy(
                     method, request_path, rd, wr, self._upstream_session,
                     db=self._db, source_ip=source_ip, pool=self._pool,
-                    config=self._config,
+                    config=self._config, signals=self._signals,
                 )
                 return
 
@@ -809,3 +842,401 @@ class ProxyServer:
         cwd = body.get("cwd")
         result = self._rtk.exec(command, cwd)
         return web.json_response(result)
+
+    # --- Signal & Dashboard API (raw TCP helpers) ---
+
+    async def _raw_api_signal_post(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        source_ip: str,
+    ) -> None:
+        """POST /api/signal — accept a manual signal from an agent SDK."""
+        headers: dict[str, str] = {}
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+            decoded = hdr.decode("utf-8", errors="replace").strip()
+            if ": " in decoded:
+                k, v = decoded.split(": ", 1)
+                headers[k.lower()] = v
+
+        content_length = int(headers.get("content-length", "0") or "0")
+        body_bytes = b""
+        if content_length > 0:
+            body_bytes = await asyncio.wait_for(
+                rd.read(min(content_length, 65536)), timeout=10
+            )
+
+        status = 200
+        resp_body = b'{"ok":true}'
+        if self._signals is None:
+            status = 503
+            resp_body = b'{"error":"signal queue not available"}'
+        else:
+            try:
+                sig = json.loads(body_bytes)
+                if not sig.get("from_node"):
+                    from db import source_host_from_ip
+                    sig["from_node"] = source_host_from_ip(source_ip)
+                asyncio.create_task(self._signals.async_enqueue(sig))
+            except (json.JSONDecodeError, Exception) as exc:
+                status = 400
+                resp_body = json.dumps({"error": str(exc)}).encode()
+
+        wr.write(
+            f"HTTP/1.1 {status} {'OK' if status == 200 else 'Error'}\r\n"
+            f"Content-Type: application/json\r\n"
+            f"Content-Length: {len(resp_body)}\r\n\r\n".encode()
+        )
+        wr.write(resp_body)
+        await wr.drain()
+        wr.close()
+
+    async def _raw_api_signals(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        request_path: str,
+    ) -> None:
+        """GET /api/signals?since=&limit=&agent=&node= — query signals."""
+        from urllib.parse import urlparse, parse_qs
+        # Drain remaining headers
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+
+        qs = parse_qs(urlparse(request_path).query)
+
+        def _qs(key: str) -> str | None:
+            vals = qs.get(key)
+            return vals[0] if vals else None
+
+        since_ts = float(_qs("since") or "0")
+        limit = int(_qs("limit") or "100")
+        from_node = _qs("node")
+        from_agent = _qs("agent")
+
+        if self._signals is None:
+            body = b'{"error":"signal queue not available"}'
+            status = 503
+        else:
+            signals = await self._signals.recent(
+                since_ts=since_ts,
+                limit=limit,
+                from_node=from_node,
+                from_agent=from_agent,
+            )
+            body = json.dumps({"signals": signals, "count": len(signals)}).encode()
+            status = 200
+
+        wr.write(
+            f"HTTP/1.1 {status} {'OK' if status == 200 else 'Error'}\r\n"
+            f"Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n\r\n".encode()
+        )
+        wr.write(body)
+        await wr.drain()
+        wr.close()
+
+    async def _raw_api_nodes(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        request_path: str,
+    ) -> None:
+        """GET /api/nodes — full federation topology for dashboard."""
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+
+        fed_cfg    = self._config.get("federation", {})
+        local_node = fed_cfg.get("local_node", "smain")
+        node_agents_cfg = fed_cfg.get("node_agents", {})
+
+        # Local node — full data
+        agents       = list(self._agents_meta.values())
+        signals_list: list[Any] = []
+        stats: dict[str, Any]   = {}
+        if self._signals is not None:
+            signals_list = await self._signals.recent(limit=50)
+            stats        = await self._signals.today_stats()
+        health = json.loads(self._build_health_json())
+
+        local_nd: dict[str, Any] = {
+            "id":      local_node,
+            "label":   local_node,
+            "status":  "ok",
+            "health":  health,
+            "agents":  agents,
+            "signals": signals_list,
+            "stats":   stats,
+        }
+
+        # All other WG nodes in canonical order
+        from db import WG_HOST_MAP
+        WG_ORDER = ["pi2", "pi", "vibe", "smain", "cloud", "sdev", "hoster"]
+        known = {name for name in WG_HOST_MAP.values()}
+
+        other_nodes: list[dict[str, Any]] = []
+        for name in WG_ORDER:
+            if name == local_node or name not in known:
+                continue
+            nd_agents = [
+                {
+                    "id":          ag["id"],
+                    "name":        ag.get("name", ag["id"]),
+                    "emoji":       ag.get("emoji", "🤖"),
+                    "model":       ag.get("model", ""),
+                    "node":        name,
+                    "description": ag.get("description", ag.get("name", ag["id"])),
+                }
+                for ag in node_agents_cfg.get(name, [])
+            ]
+            other_nodes.append({
+                "id":     name,
+                "label":  name,
+                "status": "unknown",
+                "agents": nd_agents,
+            })
+
+        services = self._build_services_health()
+        data = {
+            "ts":       time.time(),
+            "nodes":    [local_nd] + other_nodes,
+            "services": services,
+        }
+
+        body = json.dumps(data).encode()
+        wr.write(
+            f"HTTP/1.1 200 OK\r\n"
+            f"Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n\r\n".encode()
+        )
+        wr.write(body)
+        await wr.drain()
+        wr.close()
+
+    async def _raw_api_report(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        request_path: str,
+    ) -> None:
+        """GET /api/report?since=ISO&until=ISO — token savings vs Claude Sonnet baseline."""
+        from urllib.parse import urlparse, parse_qs
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+
+        qs = parse_qs(urlparse(request_path).query)
+        since_iso = (qs.get("since") or [None])[0]
+        until_iso = (qs.get("until") or [None])[0]
+
+        # Price per 1M tokens (input, output) in USD
+        PRICES: dict[str, tuple[float, float]] = {
+            "deepseek-v4-flash":      (0.07,  0.28),
+            "deepseek-v4-pro":        (0.55,  2.19),
+            "deepseek-chat":          (0.07,  0.28),
+            "deepseek-reasoner":      (0.55,  2.19),
+            "gemini-2.5-flash":       (0.15,  0.60),
+            "gemini-3.1-pro-preview": (1.25,  5.00),
+            "gemini-2.0-flash":       (0.10,  0.40),
+            "gpt-4o":                 (2.50, 10.00),
+            "gpt-4o-mini":            (0.15,  0.60),
+            "llama3.1:8b":            (0.00,  0.00),  # local
+        }
+        CLAUDE_IN  = 3.00   # claude-sonnet-4 input per 1M
+        CLAUDE_OUT = 15.00  # claude-sonnet-4 output per 1M
+
+        rows: list[dict[str, Any]] = []
+        total_actual   = 0.0
+        total_baseline = 0.0
+
+        try:
+            where_parts = ["llm_model IS NOT NULL", "llm_model != ''"]
+            params: list[Any] = []
+            if since_iso:
+                where_parts.append("timestamp >= ?")
+                params.append(since_iso)
+            if until_iso:
+                where_parts.append("timestamp <= ?")
+                params.append(until_iso)
+            where_clause = " AND ".join(where_parts)
+
+            async with self._db._lock:
+                db_rows = self._db._conn.execute(
+                    f"""SELECT llm_model, COUNT(*), COALESCE(SUM(tokens_in),0), COALESCE(SUM(tokens_out),0)
+                       FROM request_log
+                       WHERE {where_clause}
+                       GROUP BY llm_model
+                       ORDER BY SUM(COALESCE(tokens_in,0)) DESC""",
+                    params,
+                ).fetchall()
+        except Exception as exc:
+            logger.error("report_db_error", error=str(exc))
+            db_rows = []
+
+        for model, calls, tin, tout in db_rows:
+            tin  = tin  or 0
+            tout = tout or 0
+            p = PRICES.get(model, (CLAUDE_IN, CLAUDE_OUT))
+            actual   = (tin * p[0] + tout * p[1]) / 1_000_000
+            baseline = (tin * CLAUDE_IN + tout * CLAUDE_OUT) / 1_000_000
+            saved    = baseline - actual
+            pct      = (saved / baseline * 100) if baseline > 0 else 0.0
+            rows.append({
+                "model":           model,
+                "calls":           calls,
+                "tokens_in":       tin,
+                "tokens_out":      tout,
+                "actual_cost_usd": round(actual,   2),
+                "claude_cost_usd": round(baseline, 2),
+                "saved_usd":       round(saved,    2),
+                "saved_pct":       round(pct,      1),
+            })
+            total_actual   += actual
+            total_baseline += baseline
+
+        total_saved = total_baseline - total_actual
+        data = {
+            "period":            "all-time",
+            "rows":              rows,
+            "total_actual_usd":  round(total_actual,   2),
+            "total_claude_usd":  round(total_baseline, 2),
+            "total_saved_usd":   round(total_saved,    2),
+            "total_saved_pct":   round((total_saved / total_baseline * 100) if total_baseline > 0 else 0, 1),
+        }
+
+        body = json.dumps(data).encode()
+        wr.write(
+            f"HTTP/1.1 200 OK\r\n"
+            f"Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n\r\n".encode()
+        )
+        wr.write(body)
+        await wr.drain()
+        wr.close()
+
+    async def _raw_api_routing(self, wr: asyncio.StreamWriter) -> None:
+        """GET /api/routing — routing config + algorithm description."""
+        routing = self._config.get("routing", {})
+        # Check whether agents are going through Lineman or direct
+        oc_json_path = os.path.expanduser("~/.openclaw/openclaw.json")
+        lineman_mode = True
+        try:
+            import json as _json
+            with open(oc_json_path) as _f:
+                _oc = _json.load(_f)
+            google_url = _oc.get("models", {}).get("providers", {}).get("google", {}).get("baseUrl", "")
+            lineman_mode = "127.0.0.1" in google_url
+        except Exception:
+            pass
+        payload = {
+            "routing": routing,
+            "lineman_mode": lineman_mode,
+            "algorithm": [
+                {"rule": "Длинный контекст", "condition": f"> {routing.get('longContextThreshold', 60000)//1000}k токенов", "provider": routing.get("longContext", {}).get("provider", "gemini"), "model": routing.get("longContext", {}).get("model", "—")},
+                {"rule": "Размышление (think)", "condition": "тег [think]", "provider": routing.get("think", {}).get("provider", "deepseek"), "model": routing.get("think", {}).get("model", "—")},
+                {"rule": "Веб-поиск", "condition": "webSearch запрос", "provider": routing.get("webSearch", {}).get("provider", "gemini"), "model": routing.get("webSearch", {}).get("model", "—")},
+                {"rule": "Фоновые задачи", "condition": "background cron", "provider": routing.get("background", {}).get("provider", "deepseek"), "model": routing.get("background", {}).get("model", "—")},
+                {"rule": "По умолчанию", "condition": "всё остальное", "provider": routing.get("default", {}).get("provider", "deepseek"), "model": routing.get("default", {}).get("model", "—")},
+            ],
+        }
+        body = _json.dumps(payload).encode()
+        resp = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Access-Control-Allow-Origin: *\r\n"
+            + b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n"
+            + body
+        )
+        wr.write(resp)
+        await wr.drain()
+
+    async def _raw_api_routing_decisions(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+    ) -> None:
+        """GET /api/routing/decisions — last 50 routing decisions from Router."""
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+
+        decisions: list[Any] = []
+        if hasattr(self, "_router") and self._router is not None:
+            decisions = self._router.recent_decisions()
+
+        body = json.dumps({"decisions": decisions, "count": len(decisions)}).encode()
+        wr.write(
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Access-Control-Allow-Origin: *\r\n"
+            + b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n"
+            + body
+        )
+        await wr.drain()
+        wr.close()
+
+    async def _raw_dashboard(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+    ) -> None:
+        """GET /dashboard — serve dashboard/index.html."""
+        # Drain headers
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+
+        html_path = BASE_DIR / "dashboard" / "index.html"
+        if not html_path.exists():
+            body = b"<h1>Dashboard not found. Create dashboard/index.html</h1>"
+            ct = "text/html"
+        else:
+            body = html_path.read_bytes()
+            ct = "text/html; charset=utf-8"
+
+        wr.write(
+            f"HTTP/1.1 200 OK\r\n"
+            f"Content-Type: {ct}\r\n"
+            f"Content-Length: {len(body)}\r\n\r\n".encode()
+        )
+        wr.write(body)
+        await wr.drain()
+        wr.close()
+
+    def _build_services_health(self) -> list[dict[str, Any]]:
+        """Map service state to dashboard-friendly list."""
+        svc_map = {
+            "deepseek": {"label": "DeepSeek", "emoji": "☁️", "ids": ["deepseek-flash", "deepseek-pro"]},
+            "gemini":   {"label": "Gemini",   "emoji": "☁️", "ids": ["gemini-flash", "gemini-pro"]},
+            "telegram": {"label": "Telegram", "emoji": "📱", "ids": ["telegram"]},
+            "google":   {"label": "Google",   "emoji": "📧", "ids": ["google-drive", "google-gmail", "google-calendar"]},
+            "openai":   {"label": "OpenAI",   "emoji": "☁️", "ids": []},
+        }
+        services_state = self.state.get("services", {})
+        result = []
+        for svc_key, info in svc_map.items():
+            status = "unknown"
+            for sid in info["ids"]:
+                s = services_state.get(sid, {})
+                st = s.get("state", "unknown")
+                if st == "online":
+                    status = "online"
+                    break
+                elif st in ("down", "degraded"):
+                    status = st
+            result.append({
+                "id": svc_key,
+                "label": f"{info['label']} {info['emoji']}",
+                "status": status,
+            })
+        return result
