@@ -5,6 +5,8 @@ Inspired by claude-code-router.
 
 from __future__ import annotations
 
+import collections
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -65,7 +67,12 @@ class Router:
         self._long_context_threshold = routing_config.get(
             "longContextThreshold", 60000
         )
+        self._decisions: collections.deque = collections.deque(maxlen=50)
         self._build_map()
+
+    def recent_decisions(self) -> list[dict]:
+        """Return recent routing decisions, newest first."""
+        return list(reversed(self._decisions))
 
     def _build_map(self) -> None:
         """Build primary route map from config overrides."""
@@ -107,16 +114,24 @@ class Router:
         headers: dict[str, str],
         estimated_tokens: int = 0,
     ) -> RouteContext:
-        """Auto-detect route context from request body and headers.
+        """Auto-detect route context from request body and headers."""
+        triggered_by = "body"
+        snippet: str | None = None
 
-        Priority:
-          1. X-Lineman-Route header
-          2. Auto-detection by content
-        """
         route_header = headers.get("X-Lineman-Route", "")
         if route_header:
             try:
-                return RouteContext(route_header)
+                ctx = RouteContext(route_header)
+                route = self.resolve(ctx)
+                self._decisions.append({
+                    "ts": time.time(),
+                    "context": ctx.value,
+                    "provider": route.provider,
+                    "model": route.model,
+                    "triggered_by": "header",
+                    "snippet": None,
+                })
+                return ctx
             except ValueError:
                 pass
 
@@ -124,29 +139,34 @@ class Router:
         if request_body:
             try:
                 body_text = request_body.decode("utf-8", errors="replace")
+                snippet = body_text[:120].replace("\n", " ")
             except (UnicodeDecodeError, AttributeError):
                 body_text = ""
 
-        # Background: system prompt hints
         body_lower = body_text.lower()
         if any(kw in body_lower for kw in ("background", "фонов", "in background", "async task")):
-            return RouteContext.BACKGROUND
-
-        # Think: reasoning modes
-        if ("thinking" in body_lower or "reasoning" in body_lower
+            ctx = RouteContext.BACKGROUND
+        elif ("thinking" in body_lower or "reasoning" in body_lower
                 or '"thinking"' in body_lower or "'thinking'" in body_lower):
-            return RouteContext.THINK
-
-        # Web search: contains web-search tools
-        if ("web_search" in body_text or "webSearch" in body_text
+            ctx = RouteContext.THINK
+        elif ("web_search" in body_text or "webSearch" in body_text
                 or '"search"' in body_text):
-            return RouteContext.WEB_SEARCH
+            ctx = RouteContext.WEB_SEARCH
+        elif estimated_tokens > self._long_context_threshold:
+            ctx = RouteContext.LONG_CONTEXT
+        else:
+            ctx = RouteContext.DEFAULT
 
-        # Long context
-        if estimated_tokens > self._long_context_threshold:
-            return RouteContext.LONG_CONTEXT
-
-        return RouteContext.DEFAULT
+        route = self.resolve(ctx)
+        self._decisions.append({
+            "ts": time.time(),
+            "context": ctx.value,
+            "provider": route.provider,
+            "model": route.model,
+            "triggered_by": triggered_by,
+            "snippet": snippet,
+        })
+        return ctx
 
     @property
     def long_context_threshold(self) -> int:

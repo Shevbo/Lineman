@@ -18,6 +18,36 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+
+def _extract_agent_name(headers: dict[str, str]) -> str | None:
+    """Return X-Agent-Name header value, or None."""
+    return headers.get("x-agent-name") or headers.get("x-lineman-agent") or None
+
+
+def _extract_prompt_snippet(body: bytes, max_len: int = 300) -> str | None:
+    """Extract last user message content from request body, truncated."""
+    if not body:
+        return None
+    try:
+        data = json.loads(body)
+        messages = data.get("messages", [])
+        if not messages:
+            return None
+        for msg in reversed(messages):
+            content = msg.get("content", "")
+            if isinstance(content, str) and content:
+                return content[:max_len]
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text", "")
+                        if text:
+                            return text[:max_len]
+        return None
+    except Exception:
+        return None
+
+
 UPSTREAM_MAP: dict[str, str] = {
     "deepseek": "https://api.deepseek.com",
     "google": "https://gemini-proxy-worker.bshevelev75.workers.dev",
@@ -46,6 +76,7 @@ async def handle_reverse_proxy(
     source_ip: str = "",
     pool: Any = None,
     config: dict[str, Any] | None = None,
+    signals: Any = None,
 ) -> None:
     """Handle /proxy/{provider}/... — forward to upstream and log tokens."""
 
@@ -62,6 +93,10 @@ async def handle_reverse_proxy(
     if not upstream_base:
         await _send_json_error(writer, 400, f"Unknown provider: {provider!r}")
         return
+
+    # Google CF Worker requires /v1beta/ prefix — rewrite bare /models/... paths
+    if provider == "google" and rest_path.startswith("/models/"):
+        rest_path = "/v1beta" + rest_path
 
     # Read remaining HTTP request headers from the TCP stream
     req_headers: dict[str, str] = {}
@@ -100,6 +135,10 @@ async def handle_reverse_proxy(
         is_streaming = bool(req_json.get("stream", False))
     except Exception:
         pass
+
+    # Extract agent identity and prompt for signal attribution
+    agent_name = _extract_agent_name(req_headers)
+    prompt_snippet = _extract_prompt_snippet(req_body)
 
     # Build forwarded headers
     fwd_headers: dict[str, str] = {
@@ -217,8 +256,10 @@ async def handle_reverse_proxy(
             row = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "source_host": source_host_from_ip(source_ip),
+                "source_agent": agent_name,
                 "llm_provider": provider,
                 "llm_model": req_model,
+                "request_body": req_body.decode("utf-8", errors="replace")[:4096] if req_body else None,
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
                 "cache_hit": 1 if cache_read else 0,
@@ -230,6 +271,26 @@ async def handle_reverse_proxy(
                 "target_host": provider,
             }
             asyncio.create_task(db.log_request(row))
+        except Exception:
+            pass
+
+    # Auto-emit signal for dashboard
+    if signals is not None:
+        try:
+            from db import source_host_from_ip
+            asyncio.create_task(signals.async_enqueue({
+                "ts": time.time(),
+                "from_agent": agent_name,
+                "from_node": source_host_from_ip(source_ip),
+                "to_service": provider,
+                "type": "prompt" if status_code < 400 else "error",
+                "model": req_model or None,
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "latency_ms": latency_ms,
+                "prompt_snippet": prompt_snippet,
+                "status": "ok" if status_code < 400 else "error",
+            }))
         except Exception:
             pass
 
