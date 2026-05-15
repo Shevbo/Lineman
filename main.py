@@ -181,6 +181,8 @@ async def run_check(
         kwargs: dict[str, Any] = {"api_key": api_key, "deep_probe": deep_probe}
         if svc_type in ("deepseek", "gemini"):
             kwargs["model"] = svc["model"]
+        if svc_type == "gemini" and svc.get("base_url"):
+            kwargs["base_url"] = svc["base_url"]
 
         result = await _call_with_retry(check_fn, client, kwargs)
 
@@ -435,12 +437,22 @@ async def main_entry(config: dict[str, Any]) -> None:
                 "incidents": [],
             }
 
-    # Initialize request log DB
+    # Initialize request log DB + signal queue
     db = RequestLogDB()
     db.init()
+    signals = db.make_signal_queue()
+
+    # Load agent metadata
+    from agents_meta import load_agents_meta
+    agents_cfg = config.get("agents", {})
+    node_map = agents_cfg.get("node_map", {})
+    agents_meta = load_agents_meta(node_map=node_map)
+    logger.info("agents_meta_loaded", count=len(agents_meta))
 
     proxy = ProxyServer(config)
     proxy._db = db
+    proxy._signals = signals
+    proxy._agents_meta = agents_meta
 
     shutdown_event = asyncio.Event()
 

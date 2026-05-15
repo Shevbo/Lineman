@@ -126,6 +126,13 @@ class RequestLogDB:
         self._conn.commit()
         logger.info("db_initialized", path=str(self._path))
 
+    def make_signal_queue(self):
+        """Create a SignalQueue sharing this connection and lock."""
+        from signals import SignalQueue
+        sq = SignalQueue(self._conn, self._lock)
+        sq.init_table()
+        return sq
+
     async def log_request(self, row: dict[str, Any]) -> int | None:
         """Insert a row into request_log. Returns row id or None on error."""
         if not self._conn:
