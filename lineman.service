@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash %h/workspaces/lineman/run-lineman.sh
-WorkingDirectory=%h/workspaces/lineman
+ExecStart=/bin/bash %h/workspaces/infra/lineman/run-lineman.sh
+WorkingDirectory=%h/workspaces/infra/lineman
 Restart=always
 RestartSec=10
 StandardOutput=journal

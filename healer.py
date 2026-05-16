@@ -92,18 +92,9 @@ def evaluate_and_heal(
         actions.append(ha)
         _log_heal(ha)
 
-    # Rule: Gemini Pro DOWN → switch fallback to Flash
+    # Rule: Gemini Pro DOWN → log only (Flash is already in fallbacks chain; no config change needed)
     if gem_pro.get("state") == "down" and gem_flash.get("state") == "online":
-        ha = HealAction(
-            service_id="gemini-pro",
-            action="Switch fallback model to Gemini Flash",
-            command="openclaw config set model.fallback google/gemini-2.5-flash",
-        )
-        success, output = _run(["openclaw", "config", "set", "model.fallback", "google/gemini-2.5-flash"])
-        ha.success = success
-        ha.error = output if not success else None
-        actions.append(ha)
-        _log_heal(ha)
+        logger.warning("gemini_pro_down_flash_active", note="gemini-pro degraded; gemini-flash is serving as fallback")
 
     # Rule: DeepSeek ALL DOWN → switch default to Gemini
     if ds_all_down and not gem_all_down:

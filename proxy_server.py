@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -36,6 +37,8 @@ def _resolve_api_key(env_var: str, config_path: str) -> str:
     val = os.environ.get(env_var, "")
     if val:
         return val
+    if not config_path:
+        return ""
     try:
         result = subprocess.run(
             ["openclaw", "config", "get", config_path],
@@ -50,10 +53,21 @@ def _resolve_api_key(env_var: str, config_path: str) -> str:
     return ""
 
 
+def _expand_env(obj: Any) -> Any:
+    """Recursively expand ${VAR} references in config values using os.environ."""
+    if isinstance(obj, str):
+        return re.sub(r'\$\{([^}]+)\}', lambda m: os.environ.get(m.group(1), m.group(0)), obj)
+    if isinstance(obj, dict):
+        return {k: _expand_env(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_env(i) for i in obj]
+    return obj
+
+
 def _load_config() -> dict[str, Any]:
     path = BASE_DIR / "config.json"
     with open(path) as f:
-        return json.load(f)
+        return _expand_env(json.load(f))
 
 
 class ProxyServer:
@@ -111,6 +125,18 @@ class ProxyServer:
 
         # Proxy pool
         self._pool = ProxyPool(self._config.get("proxy_pool", {}))
+
+        # LLM concurrency queue — prevents cascade overloads under heavy load
+        llm_q = proxy_cfg.get("llm_queue", {})
+        self._llm_sem = asyncio.Semaphore(llm_q.get("max_concurrent", 5))
+        self._llm_queue_timeout: float = llm_q.get("queue_timeout_s", 30.0)
+        self._llm_hosts: frozenset[str] = frozenset(llm_q.get("hosts", [
+            "api.deepseek.com", "generativelanguage.googleapis.com",
+            "api.anthropic.com", "api.openai.com", "openrouter.ai",
+        ]))
+        self._llm_providers: frozenset[str] = frozenset(llm_q.get("providers", [
+            "deepseek", "google", "anthropic", "openai", "openrouter",
+        ]))
 
     async def start(self) -> None:
         """Start the proxy server.
@@ -249,11 +275,32 @@ class ProxyServer:
             # Reverse proxy: /proxy/{provider}/... — plaintext body inspection
             elif request_path_only.startswith("/proxy/"):
                 self._request_count += 1
-                await handle_reverse_proxy(
-                    method, request_path, rd, wr, self._upstream_session,
-                    db=self._db, source_ip=source_ip, pool=self._pool,
-                    config=self._config, signals=self._signals,
-                )
+                parts = request_path_only.split("/")
+                provider = parts[2] if len(parts) > 2 else ""
+                if provider in self._llm_providers:
+                    try:
+                        await asyncio.wait_for(
+                            self._llm_sem.acquire(), timeout=self._llm_queue_timeout
+                        )
+                    except asyncio.TimeoutError:
+                        wr.write(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 15\r\nContent-Length: 0\r\n\r\n")
+                        await wr.drain()
+                        wr.close()
+                        return
+                    try:
+                        await handle_reverse_proxy(
+                            method, request_path, rd, wr, self._upstream_session,
+                            db=self._db, source_ip=source_ip, pool=self._pool,
+                            config=self._config, signals=self._signals,
+                        )
+                    finally:
+                        self._llm_sem.release()
+                else:
+                    await handle_reverse_proxy(
+                        method, request_path, rd, wr, self._upstream_session,
+                        db=self._db, source_ip=source_ip, pool=self._pool,
+                        config=self._config, signals=self._signals,
+                    )
                 return
 
             # CONNECT tunnel — drain remaining headers first
@@ -263,10 +310,29 @@ class ProxyServer:
                     if hdr in (b"\r\n", b"\n", b""):
                         break
                 self._request_count += 1
-                await handle_tunnel(
-                    request_path, rd, wr, self._config,
-                    db=self._db, source_ip=source_ip, pool=self._pool,
-                )
+                host = request_path.split(":")[0]
+                if host in self._llm_hosts:
+                    try:
+                        await asyncio.wait_for(
+                            self._llm_sem.acquire(), timeout=self._llm_queue_timeout
+                        )
+                    except asyncio.TimeoutError:
+                        wr.write(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 15\r\nContent-Length: 0\r\n\r\n")
+                        await wr.drain()
+                        wr.close()
+                        return
+                    try:
+                        await handle_tunnel(
+                            request_path, rd, wr, self._config,
+                            db=self._db, source_ip=source_ip, pool=self._pool,
+                        )
+                    finally:
+                        self._llm_sem.release()
+                else:
+                    await handle_tunnel(
+                        request_path, rd, wr, self._config,
+                        db=self._db, source_ip=source_ip, pool=self._pool,
+                    )
                 return
 
             # HTTP proxy

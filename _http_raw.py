@@ -21,6 +21,54 @@ _RELAY_TIMEOUT = 120       # max idle seconds before closing a tunnel direction
 _CONNECT_TIMEOUT = 15      # upstream CONNECT handshake timeout
 
 
+async def _relay_websocket(
+    ws: aiohttp.ClientWebSocketResponse,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+) -> tuple[int, int]:
+    """Bidirectional relay between a client TCP stream and a WebSocket upstream."""
+    bytes_out = 0
+    bytes_in = 0
+
+    async def client_to_ws() -> None:
+        nonlocal bytes_out
+        try:
+            while True:
+                try:
+                    data = await asyncio.wait_for(reader.read(65536), timeout=_RELAY_TIMEOUT)
+                except asyncio.TimeoutError:
+                    break
+                if not data:
+                    break
+                bytes_out += len(data)
+                await ws.send_bytes(data)
+        except Exception:
+            pass
+        finally:
+            await ws.close()
+
+    async def ws_to_client() -> None:
+        nonlocal bytes_in
+        try:
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.BINARY:
+                    bytes_in += len(msg.data)
+                    writer.write(msg.data)
+                    await writer.drain()
+                elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
+                    break
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+    await asyncio.gather(client_to_ws(), ws_to_client(), return_exceptions=True)
+    return bytes_out, bytes_in
+
+
 async def handle_tunnel(
     target: str,
     reader: asyncio.StreamReader,
@@ -67,7 +115,53 @@ async def handle_tunnel(
     error_str: str | None = None
     status_code = 200
 
-    # --- 1. Connect upstream ---
+    # --- 1a. WebSocket tunnel (CF Worker) ---
+    if use_proxy and (use_proxy.startswith("wss://") or use_proxy.startswith("ws://")):
+        ws_url = f"{use_proxy}?target={target}"
+        try:
+            _ws_session = aiohttp.ClientSession()
+            _ws = await asyncio.wait_for(
+                _ws_session.ws_connect(
+                    ws_url,
+                    timeout=aiohttp.ClientTimeout(connect=_CONNECT_TIMEOUT, total=None),
+                ),
+                timeout=_CONNECT_TIMEOUT,
+            )
+        except Exception as exc:
+            writer.write(
+                f"HTTP/1.1 502 Bad Gateway\r\n\r\nWS tunnel connect failed: {exc}\r\n".encode()
+            )
+            await writer.drain()
+            writer.close()
+            await _ws_session.close()
+            status_code = 502
+            error_str = str(exc)
+            _maybe_log(db, target, host, source_ip, route_applied,
+                       status_code, error_str, 0, 0,
+                       int((time.monotonic() - t_start) * 1000))
+            if pool:
+                pool.record(proxy_id, False, (time.monotonic() - t_start) * 1000)
+            return
+
+        writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        await writer.drain()
+
+        logger.info("connect_tunnel_open", target=target, source_ip=source_ip, route=route_applied + "(ws)")
+
+        bytes_c2u, bytes_u2c = await _relay_websocket(_ws, reader, writer)
+        await _ws.close()
+        await _ws_session.close()
+
+        latency_ms = int((time.monotonic() - t_start) * 1000)
+        logger.info("connect_tunnel_closed", target=target, source_ip=source_ip,
+                    bytes_out=bytes_c2u, bytes_in=bytes_u2c, latency_ms=latency_ms, route=route_applied)
+        if pool:
+            pool.record(proxy_id, True, latency_ms, bytes_in=bytes_u2c, bytes_out=bytes_c2u)
+        _maybe_log(db, target, host, source_ip, route_applied, 200, None,
+                   bytes_out=bytes_c2u, bytes_in=bytes_u2c, latency_ms=latency_ms)
+        return
+
+    # --- 1b. HTTP CONNECT upstream ---
     try:
         if use_proxy:
             pu = urlparse(use_proxy)

@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -43,10 +44,21 @@ logger = structlog.get_logger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 
 
+def _expand_env(obj: Any) -> Any:
+    """Recursively expand ${VAR} references in config values using os.environ."""
+    if isinstance(obj, str):
+        return re.sub(r'\$\{([^}]+)\}', lambda m: os.environ.get(m.group(1), m.group(0)), obj)
+    if isinstance(obj, dict):
+        return {k: _expand_env(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_env(i) for i in obj]
+    return obj
+
+
 def load_config() -> dict[str, Any]:
     path = BASE_DIR / "config.json"
     with open(path) as f:
-        return json.load(f)
+        return _expand_env(json.load(f))
 
 
 def load_state() -> dict[str, Any]:

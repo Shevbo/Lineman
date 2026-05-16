@@ -2,6 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Load proxy credentials from keymaster
+[[ -f ~/keymaster/.lineman-proxy.env ]] && source ~/keymaster/.lineman-proxy.env
+
 export DEEPSEEK_API_KEY="$(.venv/bin/python3 << 'PYEOF'
 import json, os
 d = json.load(open(os.path.expanduser('~/.openclaw/agents/main/agent/auth-profiles.json')))

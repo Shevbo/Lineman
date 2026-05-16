@@ -31,7 +31,7 @@
       "name": "Gemini Flash",
       "type": "gemini",
       "model": "gemini-2.5-flash",
-      "base_url": "https://gemini-proxy-worker.bshevelev75.workers.dev",
+      "base_url": "https://generativelanguage.googleapis.com",
       "health_endpoint": "/v1beta/models",
       "api_key_env": "GEMINI_API_KEY",
       "openclaw_config_path": "",
@@ -44,7 +44,7 @@
       "name": "Gemini Pro",
       "type": "gemini",
       "model": "gemini-3.1-pro-preview",
-      "base_url": "https://gemini-proxy-worker.bshevelev75.workers.dev",
+      "base_url": "https://generativelanguage.googleapis.com",
       "health_endpoint": "/v1beta/models",
       "api_key_env": "GEMINI_API_KEY",
       "openclaw_config_path": "",
@@ -123,7 +123,19 @@
     "host": "0.0.0.0",
     "port": 9090,
     "max_connections": 100,
-    "request_timeout": 120
+    "request_timeout": 120,
+    "llm_queue": {
+      "max_concurrent": 5,
+      "queue_timeout_s": 30,
+      "hosts": [
+        "api.deepseek.com",
+        "generativelanguage.googleapis.com",
+        "api.anthropic.com",
+        "api.openai.com",
+        "openrouter.ai"
+      ],
+      "providers": ["deepseek", "google", "anthropic", "openai", "openrouter"]
+    }
   },
   "analytics": {
     "claude_logs_path": "~/.claude/projects/",
@@ -139,7 +151,7 @@
     "deep_probe_every_n": 5,
     "down_threshold": 3,
     "latency_multiplier": 2.0,
-    "proxy_url": "http://g3FLjE:v5aJS3@45.155.200.232:8000",
+    "proxy_url": "${LINEMAN_IPROYAL_URL}",
     "gemini_cf_proxy_url": "https://gemini-proxy-worker.bshevelev75.workers.dev",
     "proxy6_url": "",
     "gateway_log_pattern": "/tmp/openclaw/openclaw-*.log",
@@ -151,9 +163,10 @@
   "reverse_proxy": {
     "upstreams": {
       "deepseek": "https://api.deepseek.com",
-      "google": "https://gemini-proxy-worker.bshevelev75.workers.dev",
+      "google": "https://generativelanguage.googleapis.com",
       "anthropic": "https://api.anthropic.com",
-      "openai": "https://api.openai.com"
+      "openai": "https://api.openai.com",
+      "openrouter": "https://openrouter.ai/api/v1"
     }
   },
   "agents": {
@@ -233,19 +246,43 @@
       {
         "id": "proxy1",
         "name": "Datacenter 45.155.200.232",
-        "url": "http://g3FLjE:v5aJS3@45.155.200.232:8000",
+        "url": "${LINEMAN_PROXY1_URL}",
         "priority": 3,
         "enabled": true
       },
       {
         "id": "iproyal",
         "name": "iProyal Residential",
-        "url": "http://14aa906033b2c:2413679fc5@86.109.80.236:12323",
+        "url": "${LINEMAN_IPROYAL_URL}",
+        "priority": 1,
+        "enabled": true
+      },
+      {
+        "id": "claude-connect",
+        "name": "Claude Connect CF Worker",
+        "url": "wss://claude-connect.bshevelev75.workers.dev",
         "priority": 1,
         "enabled": true
       }
     ],
     "routes": [
+      {
+        "comment": "Claude/Anthropic — iProyal ISP (geo-unblocked)",
+        "hosts": [
+          "claude.ai",
+          "*.claude.ai",
+          "claude.com",
+          "*.claude.com",
+          "anthropic.com",
+          "*.anthropic.com",
+          "featureassets.org",
+          "160.79.104.0/21",
+          "204.236.128.0/17"
+        ],
+        "proxies": [
+          "iproyal"
+        ]
+      },
       {
         "comment": "Google APIs and Telegram need a proxy from Russia",
         "hosts": [
@@ -256,7 +293,6 @@
           "api.telegram.org"
         ],
         "proxies": [
-          "proxy1",
           "iproyal"
         ]
       },
@@ -266,23 +302,53 @@
           "api.deepseek.com",
           "api.anthropic.com",
           "api.openai.com",
-          "api.cohere.com"
+          "api.cohere.com",
+          "openrouter.ai"
         ],
-        "proxies": []
+        "proxies": [
+          "claude-connect"
+        ]
       },
       {
         "comment": "CF Worker: direct",
         "hosts": [
           "*.workers.dev"
         ],
-        "proxies": []
+        "proxies": [
+          "claude-connect"
+        ]
       },
       {
-        "comment": "Default: direct",
+        "comment": "Cloudflare CDN IPs — CF Worker cannot connect to own infra (anti-loop), use iProyal",
+        "hosts": [
+          "104.16.0.0/13",
+          "104.24.0.0/14",
+          "172.64.0.0/13",
+          "162.158.0.0/15",
+          "198.41.128.0/17",
+          "197.234.240.0/22",
+          "190.93.240.0/20",
+          "188.114.96.0/20",
+          "141.101.64.0/18",
+          "108.162.192.0/18",
+          "173.245.48.0/20",
+          "103.21.244.0/22",
+          "103.22.200.0/22",
+          "103.31.4.0/22",
+          "131.0.72.0/22"
+        ],
+        "proxies": [
+          "iproyal"
+        ]
+      },
+      {
+        "comment": "Default: all traffic via CF Worker (US exit IP, geo-neutral)",
         "hosts": [
           "*"
         ],
-        "proxies": []
+        "proxies": [
+          "claude-connect"
+        ]
       }
     ]
   }

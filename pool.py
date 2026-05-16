@@ -6,6 +6,7 @@ performance history. Pool config lives in config.json proxy_pool section.
 
 from __future__ import annotations
 
+import ipaddress
 import time
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
@@ -170,8 +171,22 @@ class ProxyPool:
     # ------------------------------------------------------------------
 
     def _route_for_host(self, host: str) -> list[str]:
+        # Try to parse as IP for CIDR matching
+        host_ip: ipaddress.IPv4Address | ipaddress.IPv6Address | None = None
+        try:
+            host_ip = ipaddress.ip_address(host)
+        except ValueError:
+            pass
+
         for route in self._routes:
             for pattern in route.get("hosts", []):
+                if host_ip is not None:
+                    try:
+                        if host_ip in ipaddress.ip_network(pattern, strict=False):
+                            return route.get("proxies", [])
+                        continue
+                    except ValueError:
+                        pass
                 if pattern == "*" or fnmatch(host, pattern):
                     return route.get("proxies", [])
         return []
