@@ -50,7 +50,7 @@ def _extract_prompt_snippet(body: bytes, max_len: int = 300) -> str | None:
 
 UPSTREAM_MAP: dict[str, str] = {
     "deepseek": "https://api.deepseek.com",
-    "google": "https://gemini-proxy-worker.bshevelev75.workers.dev",
+    "google": "https://generativelanguage.googleapis.com",
     "anthropic": "https://api.anthropic.com",
     "openai": "https://api.openai.com",
 }
@@ -93,10 +93,6 @@ async def handle_reverse_proxy(
     if not upstream_base:
         await _send_json_error(writer, 400, f"Unknown provider: {provider!r}")
         return
-
-    # Google CF Worker requires /v1beta/ prefix — rewrite bare /models/... paths
-    if provider == "google" and rest_path.startswith("/models/"):
-        rest_path = "/v1beta" + rest_path
 
     # Read remaining HTTP request headers from the TCP stream
     req_headers: dict[str, str] = {}

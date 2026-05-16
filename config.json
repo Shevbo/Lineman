@@ -297,7 +297,7 @@
         ]
       },
       {
-        "comment": "LLM APIs: direct from smain",
+        "comment": "LLM APIs — через iProyal (claude-connect WS не совместим с HTTP reverse proxy)",
         "hosts": [
           "api.deepseek.com",
           "api.anthropic.com",
@@ -306,16 +306,16 @@
           "openrouter.ai"
         ],
         "proxies": [
-          "claude-connect"
+          "iproyal"
         ]
       },
       {
-        "comment": "CF Worker: direct",
+        "comment": "CF Workers — через iProyal (claude-connect не может подключаться к *.workers.dev, anti-loop)",
         "hosts": [
           "*.workers.dev"
         ],
         "proxies": [
-          "claude-connect"
+          "iproyal"
         ]
       },
       {
