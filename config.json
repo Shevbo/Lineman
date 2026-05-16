@@ -37,7 +37,7 @@
       "openclaw_config_path": "",
       "timeout": 15,
       "interval": 60,
-      "proxy": false
+      "proxy": true
     },
     {
       "id": "gemini-pro",
@@ -50,7 +50,7 @@
       "openclaw_config_path": "",
       "timeout": 15,
       "interval": 60,
-      "proxy": false
+      "proxy": true
     },
     {
       "id": "google-drive",
