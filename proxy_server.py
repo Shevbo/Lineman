@@ -14,6 +14,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, parse_qs
 
 import aiohttp
 from aiohttp import web
@@ -30,6 +31,46 @@ from reverse_proxy import handle_reverse_proxy
 logger = structlog.get_logger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
+
+# SSH config for remote agents (Federation Agent ID to remote host/agent mapping)
+# IMPORTANT: These SSH keys must be pre-authorized on respective hosts from Lineman's host.
+REMOTE_SSH_CONFIG = {
+    "sdev": { # sdev is shevbo@10.66.0.4
+        "user": "shevbo",
+        "host_ip": "10.66.0.4",
+        "key_path": "~/.ssh/id_ed25519", # Assumes this key is authorized on sdev
+        "agent_map": { # Federation ID -> Remote OpenClaw agent ID
+            "tank-dev": "main", # TankDev on sdev is agent 'main'
+            "selfcoder-sdev": "selfcoder",
+            "qaper-sdev": "qaper",
+        }
+    },
+    "hoster": { # hoster is ubuntu@10.66.0.7
+        "user": "ubuntu",
+        "host_ip": "10.66.0.7",
+        "key_path": "~/.ssh/id_ed25519", # Assumes this key is authorized on hoster
+        "agent_map": {
+            "hoster": "main", # Hoster on hoster is agent 'main'
+            "shopin": "shopin",
+        }
+    },
+    "vibe": { # vibe is boris@10.66.0.6 (Windows)
+        "user": "boris",
+        "host_ip": "10.66.0.6",
+        "key_path": "~/.ssh/id_ed25519", # Assumes this key is authorized on vibe
+        "agent_map": {
+            "virtual-boris-vibe": "vboris2", # VBoris2 on vibe is agent 'vboris2'
+        }
+    },
+    "keymaster": { # Keymaster API service is local on smain
+        "user": "shectory", # dummy
+        "host_ip": "127.0.0.1",
+        "key_path": "", # dummy
+        "agent_map": {
+            "keymaster": "keymaster", # Keymaster on smain is agent 'keymaster'
+        }
+    },
+}
 
 
 def _resolve_api_key(env_var: str, config_path: str) -> str:
@@ -126,6 +167,10 @@ class ProxyServer:
         # Proxy pool
         self._pool = ProxyPool(self._config.get("proxy_pool", {}))
 
+        # Telegram rate limiter: account → last send timestamp
+        self._tg_rate: dict[str, float] = {}
+        self._tg_oc_path = Path.home() / ".openclaw" / "openclaw.json"
+
         # LLM concurrency queue — prevents cascade overloads under heavy load
         llm_q = proxy_cfg.get("llm_queue", {})
         self._llm_sem = asyncio.Semaphore(llm_q.get("max_concurrent", 5))
@@ -159,7 +204,6 @@ class ProxyServer:
         app.router.add_route("*", "/state", self._handle_state)
         app.router.add_route("GET", "/analytics", self._handle_analytics)
         app.router.add_route("POST", "/rtk", self._handle_rtk)
-        app.router.add_route("*", "/{path:.*}", self._handle_proxy)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -265,6 +309,16 @@ class ProxyServer:
 
             elif request_path_only == "/api/routing/decisions":
                 await self._raw_api_routing_decisions(rd, wr)
+                return
+
+            elif request_path_only == "/api/tg/send" and method == "POST":
+                await self._raw_api_tg_send(rd, wr)
+                return
+
+            # Agent-to-agent messaging API
+            # /api/agent/{target_agent_id}/message?from=<from_agent_id>&message=<msg>
+            elif request_path_only.startswith("/api/agent/"):
+                await self._raw_api_agent_message(rd, wr, request_path, method)
                 return
 
             # Dashboard static serve
@@ -383,7 +437,7 @@ class ProxyServer:
                 k, v = decoded.split(": ", 1)
                 headers[k.lower()] = v
 
-        content_length = int(headers.get("content-length", "0"))
+        content_length = int(headers.get("content-length", "0") or "0")
         body_bytes = b""
         if content_length > 0:
             body_bytes = await asyncio.wait_for(
@@ -424,7 +478,6 @@ class ProxyServer:
         first_line: bytes,
     ) -> None:
         """GET /api/log?limit=N&source_host=X — query recent log rows."""
-        from urllib.parse import urlparse, parse_qs
         # Parse query string from the first line
         first_decoded = first_line.decode("utf-8", errors="replace").strip()
         parts = first_decoded.split(" ")
@@ -481,304 +534,298 @@ class ProxyServer:
         await wr.drain()
         wr.close()
 
-    async def handle_request(
+    async def _raw_api_agent_message(
         self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        request_path: str,
         method: str,
-        url: str,
-        headers: dict[str, str],
-        body: bytes = b"",
-    ) -> dict[str, Any]:
-        """Forward a request through the proxy with smart routing."""
-        self._request_count += 1
-        start = time.monotonic()
+    ) -> None:
+        """GET /api/agent/{id}/message?from=<id>&message=<msg> -- Send message to agent."""
+        # Drain headers first
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
 
-        parsed = URL(url)
-        host = parsed.host or ""
+        parts = request_path.split("/")
+        if len(parts) < 4: # Expected: /api/agent/{id}/message
+            self._send_json_error(wr, 400, "Invalid agent message path. Usage: /api/agent/{id}/message")
+            await wr.drain()
+            wr.close()
+            return
 
-        global_cfg = self._config.get("global", {})
-        proxy_url = global_cfg.get("proxy_url", "")
-        proxy6_url = global_cfg.get("proxy6_url", "")
+        target_agent_id = parts[3]
 
-        # Determine route context from header
-        route_header = headers.get("X-Lineman-Route", "default")
-        try:
-            context = RouteContext(route_header)
-        except ValueError:
-            context = RouteContext.DEFAULT
+        # Parse query params
+        qs = parse_qs(urlparse(request_path).query)
 
-        # Resolve model
-        route = self._router.resolve(context)
-        model_id = f"{route.provider}/{route.model}"
+        def _qs(key: str) -> str | None:
+            vals = qs.get(key)
+            return vals[0] if vals else None
 
-        # Determine upstream proxy selection
-        use_proxy: str | None = None
-        rewrite_url: str | None = None
-        if host == "generativelanguage.googleapis.com":
-            cf_url = global_cfg.get("gemini_cf_proxy_url", "")
-            if cf_url:
-                rewrite_url = url.replace("https://generativelanguage.googleapis.com", cf_url)
-        elif host in ("www.googleapis.com", "gmail.googleapis.com", "docs.googleapis.com"):
-            use_proxy = proxy_url or None
-        elif host == "api.telegram.org":
-            use_proxy = proxy6_url or None
+        from_agent_id = _qs("from")
+        message_text = _qs("message")
 
-        # Resolve API key for target host
-        api_key, key_type = self._resolve_key_for_host(host)
-
-        # Build forwarded headers
-        fwd_headers = dict(headers)
-        fwd_headers.pop("Proxy-Connection", None)
-        fwd_headers.pop("X-Lineman-Route", None)
-        fwd_headers["X-Lineman-Model"] = model_id
-
-        if api_key:
-            if key_type == "bearer":
-                fwd_headers["Authorization"] = f"Bearer {api_key}"
-            elif key_type == "key_param":
-                fwd_headers["x-goog-api-key"] = api_key
-
-        # Send request (with optional URL rewrite for Cloudflare reverse proxy)
-        final_url = rewrite_url or url
-        result = await self._forward(method, final_url, fwd_headers, body, use_proxy)
-
-        latency_ms = (time.monotonic() - start) * 1000
-        result["latency_ms"] = round(latency_ms, 2)
-        result["model"] = model_id
-        result["route"] = context.value
-
-        if not result.get("success"):
-            self._error_count += 1
+        if not from_agent_id or not message_text:
+            self._send_json_error(wr, 400, "Missing 'from' or 'message' query parameter.")
+            await wr.drain()
+            wr.close()
+            return
 
         logger.info(
-            "proxy_request",
-            method=method,
-            host=host,
-            status=result.get("status"),
-            latency_ms=round(latency_ms, 2),
-            model=model_id,
-            route=context.value,
-            response_size=result.get("response_size", 0),
-        )
-        return result
-
-    async def _handle_proxy(self, request: web.Request) -> web.Response:
-        """Catch-all handler: forward to upstream or serve API."""
-        if request.method == "CONNECT":
-            return await self._handle_connect(request)
-
-        url = str(request.url)
-        body = await request.read()
-        result = await self.handle_request(
-            request.method, url, dict(request.headers), body
+            "agent_message_received",
+            target=target_agent_id,
+            source=from_agent_id,
+            message=message_text[:100], # Log first 100 chars
         )
 
-        if not result.get("success"):
-            status = result.get("status", 502)
-            return web.json_response(
-                {"error": result.get("error", "proxy error")},
-                status=status,
+        agent_meta = self._agents_meta.get(target_agent_id)
+
+        # _agents_meta only knows local openclaw.json agents.
+        # Remote federation agents (e.g. "virtual-boris-vibe") are only in REMOTE_SSH_CONFIG.
+        # Fall back: synthesize metadata from REMOTE_SSH_CONFIG if not found locally.
+        if not agent_meta:
+            for _node_key, _ssh_cfg in REMOTE_SSH_CONFIG.items():
+                if target_agent_id in _ssh_cfg["agent_map"]:
+                    agent_meta = {"id": target_agent_id, "node": _node_key}
+                    break
+
+        if not agent_meta:
+            self._send_json_error(wr, 404, f"Agent '{target_agent_id}' not found in federation.")
+            await wr.drain()
+            wr.close()
+            return
+
+        node = agent_meta.get("node", "smain")
+        response_data: dict[str, Any] = {"status": "error", "message": "Failed to communicate with agent."}
+        status_code = 500
+
+        if node == "smain": # Local agent on smain
+            try:
+                cmd = ["openclaw", "agent", "--agent", target_agent_id, "--message", message_text, "--json"]
+                logger.debug("local_agent_call", cmd=" ".join(cmd))
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout.total)
+                
+                if proc.returncode == 0:
+                    try:
+                        response_data = json.loads(stdout.decode("utf-8", errors="ignore"))
+                        status_code = 200
+                    except json.JSONDecodeError:
+                        response_data = {"status": "error", "message": "Invalid JSON response from agent.", "stdout": stdout.decode(), "stderr": stderr.decode()}
+                        status_code = 500
+                else:
+                    response_data = {"status": "error", "message": f"Agent command failed (code {proc.returncode}).", "stdout": stdout.decode(), "stderr": stderr.decode()}
+                    status_code = 500
+            except asyncio.TimeoutError:
+                response_data = {"status": "timeout", "message": f"Agent '{target_agent_id}' did not respond in time."}
+                status_code = 504
+            except Exception as e:
+                response_data = {"status": "error", "message": f"Local agent communication error: {e}"}
+                status_code = 500
+        else: # Remote agent
+            # Use SSH for remote agents, if configured
+            ssh_cfg = REMOTE_SSH_CONFIG.get(node)
+            if not ssh_cfg:
+                self._send_json_error(wr, 501, f"Remote agent on node '{node}' not configured for SSH communication.")
+                await wr.drain()
+                wr.close()
+                return
+
+            remote_agent_id = ssh_cfg["agent_map"].get(target_agent_id)
+            if not remote_agent_id:
+                self._send_json_error(wr, 404, f"Federation agent '{target_agent_id}' not mapped to remote agent on node '{node}'.")
+                await wr.drain()
+                wr.close()
+                return
+            
+            try:
+                escaped_msg = message_text.replace('"', '\\"')
+                ssh_cmd = [
+                    "ssh",
+                    "-o", "ConnectTimeout=15",
+                    "-i", os.path.expanduser(ssh_cfg["key_path"]),
+                    f"{ssh_cfg['user']}@{ssh_cfg['host_ip']}",
+                    f'openclaw agent --agent {remote_agent_id} --message "{escaped_msg}" --json'
+                ]
+                logger.debug("remote_agent_call", cmd=" ".join(ssh_cmd))
+                
+                proc = await asyncio.create_subprocess_exec(
+                    *ssh_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout.total)
+
+                if proc.returncode == 0:
+                    try:
+                        response_data = json.loads(stdout.decode("utf-8", errors="ignore"))
+                        status_code = 200
+                    except json.JSONDecodeError:
+                        response_data = {"status": "error", "message": "Invalid JSON response from remote agent.", "stdout": stdout.decode(), "stderr": stderr.decode()}
+                        status_code = 500
+                else:
+                    response_data = {"status": "error", "message": f"Remote agent command failed (code {proc.returncode}).", "stdout": stdout.decode(), "stderr": stderr.decode()}
+                    status_code = 500
+            except asyncio.TimeoutError:
+                response_data = {"status": "timeout", "message": f"Remote agent '{target_agent_id}' on node '{node}' did not respond in time."}
+                status_code = 504
+            except FileNotFoundError: # SSH command not found
+                response_data = {"status": "error", "message": "SSH command not found. Is SSH client installed and in PATH?"}
+                status_code = 500
+            except Exception as e:
+                response_data = {"status": "error", "message": f"Remote agent communication error: {e}"}
+                status_code = 500
+
+        self._send_json_response(wr, status_code, response_data)
+        await wr.drain()
+        wr.close()
+
+    async def _raw_api_tg_send(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+    ) -> None:
+        """POST /api/tg/send — rate-limited Telegram sendMessage.
+
+        Body: {"account": "default", "chat_id": "...", "text": "...", "parse_mode": "Markdown"}
+        Rate limit: 1 message per 15 seconds per account.
+        """
+        headers: dict[str, str] = {}
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+            decoded = hdr.decode("utf-8", errors="replace").strip()
+            if ": " in decoded:
+                k, v = decoded.split(": ", 1)
+                headers[k.lower()] = v
+
+        try:
+            content_length = int(headers.get("content-length", "0") or "0")
+        except ValueError:
+            content_length = 0
+        body_bytes = b""
+        if content_length > 0:
+            body_bytes = await asyncio.wait_for(
+                rd.read(min(content_length, 65536)), timeout=10
             )
 
-        # Forward response to client
-        resp_headers = result.get("headers", {})
-        body_bytes = result.get("body", b"")
-        resp = web.Response(
-            body=body_bytes,
-            status=result.get("status", 200),
-        )
-        for hdr, val in resp_headers.items():
-            if hdr.lower() not in ("transfer-encoding", "content-encoding", "content-length"):
-                resp.headers[hdr] = val
-        return resp
-
-    async def _raw_connect_handler(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
-        """Raw TCP handler: first-line dispatch (unused, kept for reference)."""
         try:
-            line = await asyncio.wait_for(reader.readline(), timeout=10)
-        except asyncio.TimeoutError:
-            writer.close()
+            req = json.loads(body_bytes)
+        except json.JSONDecodeError:
+            self._send_json_response(wr, 400, {"ok": False, "error": "invalid JSON"})
+            await wr.drain()
+            wr.close()
             return
 
-        if not line:
-            writer.close()
+        account = req.get("account", "default")
+        chat_id = str(req.get("chat_id", ""))
+        text = req.get("text", "")
+        parse_mode = req.get("parse_mode", "")
+
+        if not chat_id or not text:
+            self._send_json_response(wr, 400, {"ok": False, "error": "chat_id and text required"})
+            await wr.drain()
+            wr.close()
             return
 
-        parts = line.decode("utf-8", errors="replace").strip().split(" ")
-        if len(parts) < 2:
-            writer.close()
+        # Rate limit check
+        RATE_LIMIT_S = 15.0
+        now = time.time()
+        last = self._tg_rate.get(account, 0.0)
+        since = now - last
+        if since < RATE_LIMIT_S:
+            retry_after = round(RATE_LIMIT_S - since, 1)
+            self._send_json_response(wr, 429, {"ok": False, "retry_after": retry_after})
+            await wr.drain()
+            wr.close()
+            logger.warning("tg_rate_limited", account=account, retry_after=retry_after)
             return
 
-        method = parts[0].upper()
-
-        if method == "CONNECT":
-            await self._handle_tunnel(parts[1], reader, writer)
-        else:
-            data = line
-            rest = await reader.read(65536)
-            data += rest
-            url = parts[1] if len(parts) > 1 else "/"
-            await self._handle_http_raw(url, method, data, writer)
-
-    async def _handle_tunnel(
-        self, target: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
-        """Handle CONNECT tunnel (legacy, unused in active path)."""
-        host = target
-        port = 443
-        if ":" in host:
-            host, port_str = host.rsplit(":", 1)
-            port = int(port_str)
-
-        global_cfg = self._config.get("global", {})
-        proxy_url = global_cfg.get("proxy_url", "")
-        proxy6_url = global_cfg.get("proxy6_url", "")
-
-        use_proxy: str | None = None
-        if any(g in host for g in ("generativelanguage.googleapis.com",
-                                     "www.googleapis.com", "gmail.googleapis.com",
-                                     "docs.googleapis.com")):
-            use_proxy = proxy_url or None
-        elif "api.telegram.org" in host:
-            use_proxy = proxy6_url or None
-
+        # Load token from openclaw.json
         try:
-            if use_proxy:
-                from urllib.parse import urlparse
-                import base64
-                pu = urlparse(use_proxy)
-                up_reader, up_writer = await asyncio.open_connection(
-                    pu.hostname, pu.port or 80,
-                )
-                connect_req = (
-                    f"CONNECT {target} HTTP/1.1\r\n"
-                    f"Host: {target}\r\n"
-                )
-                if pu.username and pu.password:
-                    creds = base64.b64encode(
-                        f"{pu.username}:{pu.password}".encode()
-                    ).decode()
-                    connect_req += f"Proxy-Authorization: Basic {creds}\r\n"
-                connect_req += "\r\n"
-                up_writer.write(connect_req.encode())
-                await up_writer.drain()
-                resp_line = await asyncio.wait_for(up_reader.readline(), timeout=15)
-                if not resp_line or b"200" not in resp_line:
-                    writer.write(f"HTTP/1.1 502 Bad Gateway\r\n\r\n{resp_line.decode(errors='replace')}".encode())
-                    await writer.drain()
-                    up_writer.close()
-                    writer.close()
+            with open(self._tg_oc_path) as f:
+                oc = json.load(f)
+            token = (
+                oc.get("channels", {})
+                .get("telegram", {})
+                .get("accounts", {})
+                .get(account, {})
+                .get("botToken", "")
+            )
+        except Exception:
+            self._send_json_response(wr, 503, {"ok": False, "error": "config unavailable"})
+            await wr.drain()
+            wr.close()
+            return
+
+        if not token:
+            self._send_json_response(wr, 400, {"ok": False, "error": f"unknown account: {account}"})
+            await wr.drain()
+            wr.close()
+            return
+
+        # Send to Telegram
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+
+        # Set optimistically before await to prevent concurrent bypass
+        self._tg_rate[account] = time.time()
+
+        tg_url = f"https://api.telegram.org/bot{token}/sendMessage"
+        try:
+            async with self._upstream_session.post(
+                tg_url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                try:
+                    tg_body = await resp.json(content_type=None)
+                except Exception:
+                    self._tg_rate[account] = 0.0
+                    self._send_json_response(wr, 503, {"ok": False, "error": "telegram returned non-JSON"})
+                    await wr.drain()
+                    wr.close()
                     return
-                while True:
-                    hdr = await asyncio.wait_for(up_reader.readline(), timeout=10)
-                    if hdr in (b"\r\n", b"\n", b""):
-                        break
-            else:
-                up_reader, up_writer = await asyncio.open_connection(host, port)
-        except (OSError, asyncio.TimeoutError) as exc:
-            writer.write(f"HTTP/1.1 502 Bad Gateway\r\n\r\nCONNECT failed: {exc}\r\n".encode())
-            await writer.drain()
-            writer.close()
-            return
+                if tg_body.get("ok"):
+                    self._send_json_response(wr, 200, {
+                        "ok": True,
+                        "message_id": tg_body.get("result", {}).get("message_id"),
+                    })
+                else:
+                    # Reset rate on failure so caller can retry
+                    self._tg_rate[account] = 0.0
+                    self._send_json_response(wr, 503, {
+                        "ok": False,
+                        "error": f"telegram error: {tg_body.get('description', 'unknown')}",
+                    })
+        except asyncio.TimeoutError:
+            self._tg_rate[account] = 0.0
+            self._send_json_response(wr, 504, {"ok": False, "error": "telegram timeout"})
+        except Exception:
+            self._tg_rate[account] = 0.0
+            self._send_json_response(wr, 503, {"ok": False, "error": "upstream error"})
 
-        self._request_count += 1
-        writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-        await writer.drain()
+        await wr.drain()
+        wr.close()
 
-        closed = asyncio.Event()
-
-        async def relay(a: asyncio.StreamReader, b: asyncio.StreamWriter):
-            try:
-                while not closed.is_set():
-                    data = await asyncio.wait_for(a.read(65536), timeout=60)
-                    if not data:
-                        break
-                    b.write(data)
-                    await b.drain()
-            except (ConnectionError, asyncio.TimeoutError, OSError):
-                pass
-            finally:
-                closed.set()
-
-        await asyncio.gather(
-            relay(reader, up_writer),
-            relay(up_reader, writer),
+    def _send_json_response(self, wr: asyncio.StreamWriter, status: int, data: dict[str, Any]) -> None:
+        body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        wr.write(
+            f"HTTP/1.1 {status} {'OK' if status == 200 else 'Error'}\r\n"
+            f"Content-Type: application/json; charset=utf-8\r\n"
+            f"Content-Length: {len(body)}\r\n\r\n".encode()
         )
+        wr.write(body)
+        
+    def _send_json_error(self, wr: asyncio.StreamWriter, status: int, message: str) -> None:
+        self._send_json_response(wr, status, {"status": "error", "message": message})
 
-        up_writer.close()
-        writer.close()
-
-    async def _handle_http_raw(self, url: str, method: str, data: bytes, writer: asyncio.StreamWriter) -> None:
-        """Route a raw HTTP request through aiohttp."""
-        writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
-        await writer.drain()
-        writer.close()
-
-    async def _handle_connect(self, request: web.Request):
-        """Legacy CONNECT handler for aiohttp (unused with raw TCP server)."""
-        return web.Response(status=400, text="Use raw TCP proxy instead")
-
-    async def _forward(
-        self,
-        method: str,
-        url: str,
-        headers: dict[str, str],
-        body: bytes,
-        proxy: str | None,
-    ) -> dict[str, Any]:
-        """Forward an HTTP request upstream."""
-        session = self._upstream_session
-        if session is None:
-            return {"success": False, "error": "proxy not started"}
-
-        try:
-            kwargs: dict[str, Any] = {
-                "headers": headers,
-                "allow_redirects": True,
-            }
-            if method in ("POST", "PUT", "PATCH") and body:
-                kwargs["data"] = body
-
-            if proxy:
-                kwargs["proxy"] = proxy
-
-            req_method = getattr(session, method.lower(), session.get)
-            response = await req_method(url, **kwargs)
-
-            resp_body = await response.read()
-            return {
-                "success": response.status < 500,
-                "status": response.status,
-                "headers": dict(response.headers),
-                "body": resp_body,
-                "response_size": len(resp_body),
-            }
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            return {"success": False, "error": str(exc)}
-
-    def _resolve_key_for_host(self, host: str) -> tuple[str, str]:
-        """Return (api_key, key_type) for the given host."""
-        services = self._config.get("services", [])
-        for svc in services:
-            base_url = svc.get("base_url", "")
-            if host in base_url:
-                api_key = _resolve_api_key(
-                    svc.get("api_key_env", ""),
-                    svc.get("openclaw_config_path", ""),
-                )
-                svc_type = svc.get("type", "")
-                if svc_type in ("gemini",):
-                    return (api_key, "key_param")
-                return (api_key, "bearer")
-
-        # Google OAuth services
-        if host in ("www.googleapis.com", "gmail.googleapis.com", "docs.googleapis.com"):
-            token = os.environ.get("GOOGLE_ACCESS_TOKEN", "")
-            if token:
-                return (token, "bearer")
-
-        return ("", "")
 
     # --- JSON builders for local management API ---
 
@@ -967,7 +1014,6 @@ class ProxyServer:
         request_path: str,
     ) -> None:
         """GET /api/signals?since=&limit=&agent=&node= — query signals."""
-        from urllib.parse import urlparse, parse_qs
         # Drain remaining headers
         while True:
             hdr = await asyncio.wait_for(rd.readline(), timeout=5)
@@ -1093,6 +1139,7 @@ class ProxyServer:
         request_path: str,
     ) -> None:
         """GET /api/report?since=ISO&until=ISO — token savings vs Claude Sonnet baseline."""
+        from db import WG_HOST_MAP # Import moved here
         from urllib.parse import urlparse, parse_qs
         while True:
             hdr = await asyncio.wait_for(rd.readline(), timeout=5)
@@ -1262,7 +1309,7 @@ class ProxyServer:
             if hdr in (b"\r\n", b"\n", b""):
                 break
 
-        html_path = BASE_DIR / "dashboard" / "index.html"
+        html_path = Path("/home/shectory/workspaces/projects/shectory-dashboard") / "index.html"
         if not html_path.exists():
             body = b"<h1>Dashboard not found. Create dashboard/index.html</h1>"
             ct = "text/html"
