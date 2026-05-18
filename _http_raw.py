@@ -88,6 +88,26 @@ async def handle_tunnel(
         host, port_str = target.rsplit(":", 1)
         port = int(port_str)
 
+    # Safety net: detect LLM calls arriving via CONNECT instead of /proxy/
+    _llm_provider = llm_provider_from_host(host)
+    if _llm_provider is not None:
+        logger.warning(
+            "llm_via_connect_tunnel",
+            host=host,
+            source_ip=source_ip,
+            provider=_llm_provider,
+        )
+        if db is not None:
+            import asyncio as _asyncio
+            _asyncio.ensure_future(db.log_request({
+                "source_host": source_host_from_ip(source_ip),
+                "llm_provider": _llm_provider,
+                "route_applied": "connect_tunnel_llm_flagged",
+                "status_code": 0,
+                "error": f"LLM via CONNECT tunnel: {host}",
+                "request_size": 0,
+            }))
+
     # Proxy selection: pool first, then legacy global config fallback
     use_proxy: str | None = None
     proxy_id: str = "direct"
