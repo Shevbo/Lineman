@@ -92,7 +92,7 @@
       "openclaw_config_path": "",
       "timeout": 10,
       "interval": 60,
-      "proxy": false,
+      "proxy": true,
       "use_proxy6": false
     }
   ],
@@ -159,6 +159,47 @@
     "report_time": "23:59",
     "state_file": "state.json",
     "metrics_file": "metrics.json"
+  },
+  "pricing": {
+    "source": "docs/llm-pricing-2026-05.md",
+    "updated": "2026-05-17",
+    "note": "Все цены в USD за 1M токенов",
+    "models": {
+      "deepseek-v4-flash":              {"in": 0.14,  "out": 0.28,  "cache_hit": 0.0028, "ctx_k": 1024, "note": "Скидка 75% до 31.05.2026"},
+      "deepseek-v4-pro":                {"in": 0.435, "out": 0.87,  "cache_hit": 0.0036, "ctx_k": 1024, "note": "Reasoning. Скидка 75% до 31.05.2026"},
+      "gemini-2.5-flash":               {"in": 0.15,  "out": 0.60,  "ctx_k": 1024},
+      "gemini-2.5-pro":                 {"in": 1.25,  "out": 10.0,  "ctx_k": 2048, "note": ">200K: $2.50/$15"},
+      "gemini-3.1-pro-preview":         {"in": 2.0,   "out": 12.0,  "ctx_k": 1024, "note": ">200K: $4/$18"},
+      "claude-haiku-4-5-20251001":      {"in": 1.0,   "out": 5.0,   "cache_hit": 0.10, "ctx_k": 200},
+      "claude-sonnet-4-6":              {"in": 3.0,   "out": 15.0,  "cache_hit": 0.30, "ctx_k": 200},
+      "claude-opus-4-7":                {"in": 5.0,   "out": 25.0,  "cache_hit": 0.50, "ctx_k": 1024},
+      "gpt-4o-mini":                    {"in": 0.15,  "out": 0.60,  "ctx_k": 128},
+      "gpt-4o":                         {"in": 2.5,   "out": 10.0,  "ctx_k": 128},
+      "gpt-4.1":                        {"in": 2.0,   "out": 8.0,   "ctx_k": 1047},
+      "o4-mini":                        {"in": 1.1,   "out": 4.4,   "ctx_k": 200},
+      "o3":                             {"in": 2.0,   "out": 8.0,   "ctx_k": 200},
+      "google/gemini-2.0-flash-lite-001": {"in": 0.10, "out": 0.40, "ctx_k": 1024},
+      "anthropic/claude-opus-4.7":      {"in": 5.0,   "out": 25.0,  "cache_hit": 0.50, "ctx_k": 1024},
+      "mistralai/mistral-medium-3-5":   {"in": 1.5,   "out": 7.5,   "ctx_k": 128},
+      "llama3.1:8b":                    {"in": 0.0,   "out": 0.0,   "ctx_k": 128, "note": "Local Ollama"},
+      "llama3.2-vision:11b":            {"in": 0.0,   "out": 0.0,   "ctx_k": 128, "note": "Local Ollama"}
+    }
+  },
+  "dedup_cache": {
+    "enabled": true,
+    "ttl_secs": 30,
+    "max_entries": 200,
+    "window_secs": 60,
+    "max_retries": 3,
+    "alert_cooldown": 300
+  },
+  "circuit_breaker": {
+    "enabled": true,
+    "window_secs": 60,
+    "max_calls": 20,
+    "max_bytes_per_call": 400000,
+    "max_bytes_window": 2000000,
+    "alert_cooldown_secs": 120
   },
   "reverse_proxy": {
     "upstreams": {
@@ -342,12 +383,12 @@
         ]
       },
       {
-        "comment": "Default: all traffic via CF Worker (US exit IP, geo-neutral)",
+        "comment": "Default: all traffic via iProyal (claude-connect WS tunnel returns 400 on HTTP requests — unusable as default)",
         "hosts": [
           "*"
         ],
         "proxies": [
-          "claude-connect"
+          "iproyal"
         ]
       }
     ]

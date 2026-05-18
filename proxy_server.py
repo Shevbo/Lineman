@@ -27,6 +27,8 @@ from router import Router, RouteContext
 from rtk import RTK
 from _http_raw import handle_tunnel, handle_http
 from reverse_proxy import handle_reverse_proxy
+from circuit_breaker import CircuitBreaker
+from dedup_cache import DedupCache
 
 logger = structlog.get_logger(__name__)
 
@@ -171,6 +173,12 @@ class ProxyServer:
         self._tg_rate: dict[str, float] = {}
         self._tg_oc_path = Path.home() / ".openclaw" / "openclaw.json"
 
+        # Circuit breaker (per-source_ip sliding window)
+        self._breaker = CircuitBreaker(self._config)
+
+        # Request dedup cache + retry analyzer
+        self._dedup = DedupCache(self._config)
+
         # LLM concurrency queue — prevents cascade overloads under heavy load
         llm_q = proxy_cfg.get("llm_queue", {})
         self._llm_sem = asyncio.Semaphore(llm_q.get("max_concurrent", 5))
@@ -196,6 +204,8 @@ class ProxyServer:
             connector=connector,
             timeout=self._timeout,
         )
+        self._breaker.set_session(self._upstream_session)
+        self._dedup.set_session(self._upstream_session)
 
         # aiohttp app for HTTP-only (management API + HTTP forward proxy)
         app = web.Application()
@@ -346,6 +356,7 @@ class ProxyServer:
                             method, request_path, rd, wr, self._upstream_session,
                             db=self._db, source_ip=source_ip, pool=self._pool,
                             config=self._config, signals=self._signals,
+                            breaker=self._breaker, dedup=self._dedup,
                         )
                     finally:
                         self._llm_sem.release()
@@ -354,6 +365,7 @@ class ProxyServer:
                         method, request_path, rd, wr, self._upstream_session,
                         db=self._db, source_ip=source_ip, pool=self._pool,
                         config=self._config, signals=self._signals,
+                        breaker=self._breaker, dedup=self._dedup,
                     )
                 return
 
@@ -1150,21 +1162,26 @@ class ProxyServer:
         since_iso = (qs.get("since") or [None])[0]
         until_iso = (qs.get("until") or [None])[0]
 
-        # Price per 1M tokens (input, output) in USD
+        # Price per 1M tokens (input, output) in USD — updated 2026-05-17
         PRICES: dict[str, tuple[float, float]] = {
-            "deepseek-v4-flash":      (0.07,  0.28),
-            "deepseek-v4-pro":        (0.55,  2.19),
-            "deepseek-chat":          (0.07,  0.28),
-            "deepseek-reasoner":      (0.55,  2.19),
+            "deepseek-v4-flash":      (0.14,  0.28),
+            "deepseek-v4-pro":        (0.435, 0.87),
+            "deepseek-chat":          (0.14,  0.28),
+            "deepseek-reasoner":      (0.435, 0.87),
             "gemini-2.5-flash":       (0.15,  0.60),
-            "gemini-3.1-pro-preview": (1.25,  5.00),
+            "gemini-2.5-pro":         (1.25, 10.00),
+            "gemini-3.1-pro-preview": (2.00, 12.00),
             "gemini-2.0-flash":       (0.10,  0.40),
             "gpt-4o":                 (2.50, 10.00),
             "gpt-4o-mini":            (0.15,  0.60),
-            "llama3.1:8b":            (0.00,  0.00),  # local
+            "claude-haiku-4-5":       (1.00,  5.00),
+            "claude-haiku-4-5-20251001": (1.00, 5.00),
+            "claude-sonnet-4-6":      (3.00, 15.00),
+            "claude-opus-4-7":        (5.00, 25.00),
+            "llama3.1:8b":            (0.00,  0.00),
         }
-        CLAUDE_IN  = 3.00   # claude-sonnet-4 input per 1M
-        CLAUDE_OUT = 15.00  # claude-sonnet-4 output per 1M
+        CLAUDE_IN  = 3.00   # claude-sonnet-4-6 input per 1M
+        CLAUDE_OUT = 15.00  # claude-sonnet-4-6 output per 1M
 
         rows: list[dict[str, Any]] = []
         total_actual   = 0.0

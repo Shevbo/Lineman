@@ -473,6 +473,9 @@ async def main_entry(config: dict[str, Any]) -> None:
         shutdown_event.set()
 
     loop = asyncio.get_running_loop()
+    # Любой синхронный subprocess/sqlite-вызов в корутине морозит весь loop.
+    # debug-режим логирует callback дольше 0.5с — ловит блокировки event loop.
+    loop.slow_callback_duration = 0.5
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _signal_handler)
 
@@ -534,7 +537,7 @@ def main() -> None:
     logger.info("lineman_booting")
     config = load_config()
     try:
-        asyncio.run(main_entry(config))
+        asyncio.run(main_entry(config), debug=True)
     except KeyboardInterrupt:
         logger.info("lineman_shutdown", reason="keyboard_interrupt")
     except Exception:
