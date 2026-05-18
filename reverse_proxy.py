@@ -24,7 +24,7 @@ def _extract_agent_name(headers: dict[str, str]) -> str | None:
     return headers.get("x-agent-name") or headers.get("x-lineman-agent") or None
 
 
-def _extract_prompt_snippet(body: bytes, max_len: int = 300) -> str | None:
+def _extract_prompt_snippet(body: bytes, max_len: int = 2000) -> str | None:
     """Extract last user message content from request body, truncated."""
     if not body:
         return None
@@ -77,6 +77,8 @@ async def handle_reverse_proxy(
     pool: Any = None,
     config: dict[str, Any] | None = None,
     signals: Any = None,
+    breaker: Any = None,
+    dedup: Any = None,
 ) -> None:
     """Handle /proxy/{provider}/... — forward to upstream and log tokens."""
 
@@ -135,6 +137,99 @@ async def handle_reverse_proxy(
     # Extract agent identity and prompt for signal attribution
     agent_name = _extract_agent_name(req_headers)
     prompt_snippet = _extract_prompt_snippet(req_body)
+
+    # Circuit breaker — check before forwarding
+    if breaker is not None:
+        blocked, cb_reason = breaker.check(
+            source_ip, len(req_body), provider, req_model, agent_name
+        )
+        if blocked:
+            logger.warning(
+                "rproxy_cb_blocked",
+                source_ip=source_ip,
+                provider=provider,
+                model=req_model,
+                reason=cb_reason,
+            )
+            asyncio.create_task(
+                breaker.alert(source_ip, cb_reason, provider, req_model, agent_name)
+            )
+            if signals is not None:
+                try:
+                    from db import source_host_from_ip
+                    asyncio.create_task(signals.async_enqueue({
+                        "ts": time.time(),
+                        "from_agent": agent_name,
+                        "from_node": source_host_from_ip(source_ip),
+                        "to_service": provider,
+                        "type": "error",
+                        "model": req_model or None,
+                        "tokens_in": None,
+                        "tokens_out": None,
+                        "latency_ms": 0,
+                        "prompt_snippet": f"[CB BLOCKED] {cb_reason}",
+                        "status": "error",
+                    }))
+                except Exception:
+                    pass
+            await _send_json_error(writer, 429, f"Circuit breaker: {cb_reason}")
+            return
+
+    # Dedup cache — check for identical request, record call for retry analysis
+    _dedup_key: str | None = None
+    if dedup is not None and req_body:
+        _dedup_key = dedup.req_hash(req_body)
+        if _dedup_key:
+            cached = dedup.get_cached(_dedup_key)
+            if cached is not None:
+                cached_status, cached_body = cached
+                logger.info(
+                    "dedup_cache_hit",
+                    key=_dedup_key, provider=provider, model=req_model,
+                    source_ip=source_ip,
+                )
+                # Return cached response immediately — no upstream call
+                try:
+                    writer.write(
+                        f"HTTP/1.1 {cached_status} OK\r\n"
+                        f"Content-Type: application/json\r\n"
+                        f"Content-Length: {len(cached_body)}\r\n"
+                        f"X-Dedup-Cache: hit\r\n\r\n".encode()
+                    )
+                    writer.write(cached_body)
+                    await writer.drain()
+                    writer.close()
+                except Exception:
+                    pass
+                # Emit dedup signal
+                if signals is not None:
+                    try:
+                        from db import source_host_from_ip
+                        asyncio.create_task(signals.async_enqueue({
+                            "ts": time.time(),
+                            "from_agent": agent_name,
+                            "from_node": source_host_from_ip(source_ip),
+                            "to_service": provider,
+                            "type": "error",
+                            "model": req_model or None,
+                            "tokens_in": None, "tokens_out": None, "latency_ms": 0,
+                            "prompt_snippet": f"[DEDUP HIT] {_dedup_key} — cached response returned",
+                            "status": "ok",
+                        }))
+                    except Exception:
+                        pass
+                return
+
+            # Record call + check if this is a retry loop
+            is_retry, retry_count = dedup.record_and_check(
+                _dedup_key, source_ip, provider, req_model, agent_name
+            )
+            if is_retry:
+                logger.warning(
+                    "dedup_retry_loop",
+                    key=_dedup_key, count=retry_count,
+                    source_ip=source_ip, provider=provider,
+                )
 
     # Build forwarded headers
     fwd_headers: dict[str, str] = {
@@ -222,6 +317,10 @@ async def handle_reverse_proxy(
 
                 tokens_in, tokens_out, cache_read = _extract_usage_json(resp_body)
 
+                # Store in dedup cache (non-streaming only)
+                if dedup is not None and _dedup_key and status_code == 200:
+                    dedup.store(_dedup_key, status_code, resp_body)
+
     except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
         error_str = str(exc)
         logger.warning("rproxy_upstream_error", provider=provider,
@@ -238,6 +337,13 @@ async def handle_reverse_proxy(
         writer.close()
     except Exception:
         pass
+
+    # Record call in circuit breaker window (after response, uses actual body size)
+    if breaker is not None:
+        try:
+            breaker.record(source_ip, len(req_body))
+        except Exception:
+            pass
 
     if pool is not None:
         try:
@@ -256,6 +362,7 @@ async def handle_reverse_proxy(
                 "llm_provider": provider,
                 "llm_model": req_model,
                 "request_body": req_body.decode("utf-8", errors="replace")[:4096] if req_body else None,
+                "request_size": len(req_body) if req_body else 0,
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
                 "cache_hit": 1 if cache_read else 0,

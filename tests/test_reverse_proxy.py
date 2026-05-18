@@ -37,9 +37,9 @@ def test_extract_prompt_snippet_from_messages():
 
 def test_extract_prompt_snippet_truncation():
     from reverse_proxy import _extract_prompt_snippet
-    body = json.dumps({"messages": [{"role": "user", "content": "A" * 500}]}).encode()
+    body = json.dumps({"messages": [{"role": "user", "content": "A" * 3000}]}).encode()
     result = _extract_prompt_snippet(body)
-    assert result is not None and len(result) == 300
+    assert result is not None and len(result) == 2000
 
 
 def test_extract_prompt_snippet_invalid_json():
