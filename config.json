@@ -196,9 +196,9 @@
   "circuit_breaker": {
     "enabled": true,
     "window_secs": 60,
-    "max_calls": 20,
-    "max_bytes_per_call": 400000,
-    "max_bytes_window": 2000000,
+    "max_calls": 30,
+    "max_bytes_per_call": 8000000,
+    "max_bytes_window": 40000000,
     "alert_cooldown_secs": 120
   },
   "reverse_proxy": {
