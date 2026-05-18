@@ -48,6 +48,131 @@ def _extract_prompt_snippet(body: bytes, max_len: int = 2000) -> str | None:
         return None
 
 
+def _count_message_tokens(content: Any) -> int:
+    """Estimate token count from a message content field (4 chars ≈ 1 token)."""
+    if isinstance(content, str):
+        return len(content) // 4
+    if isinstance(content, list):
+        return sum(
+            len(block.get("text", "")) // 4
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return 0
+
+
+_SUMMARIZE_PROMPT = (
+    "Summarize this conversation in 5 bullet points. "
+    "Preserve: decisions made, tool results, unresolved questions, key facts. Be terse."
+)
+
+
+async def _call_summarizer(
+    tail_msgs: list[dict],
+    config: dict[str, Any] | None = None,
+) -> str | None:
+    """POST tail messages to DeepSeek directly (bypassing Lineman) for summarization.
+
+    Uses DEEPSEEK_API_KEY and LINEMAN_IPROYAL_URL env vars. Returns None on any error.
+    """
+    import os
+
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        return None
+
+    proxy_url = os.environ.get("LINEMAN_IPROYAL_URL", "") or None
+
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "system", "content": _SUMMARIZE_PROMPT}] + tail_msgs,
+        "max_tokens": 300,
+        "stream": False,
+    }
+    try:
+        kwargs: dict[str, Any] = dict(
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=8.0),
+        )
+        if proxy_url:
+            kwargs["proxy"] = proxy_url
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(
+                "https://api.deepseek.com/v1/chat/completions", **kwargs
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                choices = data.get("choices", [])
+                if choices:
+                    return choices[0].get("message", {}).get("content") or None
+                return None
+    except Exception:
+        return None
+
+
+async def summarise_addendums(
+    req_body: bytes,
+    config: dict[str, Any] | None = None,
+) -> tuple[bytes, int, int]:
+    """Compress conversation tail when it dominates the useful prompt.
+
+    Returns (new_body, tail_tokens_before, tail_tokens_after).
+    tail_after == tail_before means no change applied.
+    """
+    try:
+        data = json.loads(req_body)
+    except Exception:
+        return req_body, 0, 0
+
+    messages = data.get("messages")
+    if not isinstance(messages, list) or len(messages) < 4:
+        return req_body, 0, 0
+
+    system_tokens = sum(
+        _count_message_tokens(m.get("content", ""))
+        for m in messages if m.get("role") == "system"
+    )
+    last_user = next(
+        (m for m in reversed(messages) if m.get("role") == "user"), None
+    )
+    if last_user is None:
+        return req_body, 0, 0
+
+    user_tokens = _count_message_tokens(last_user.get("content", ""))
+    useful = system_tokens + user_tokens
+    if useful == 0:
+        return req_body, 0, 0
+
+    tail_msgs = [
+        m for m in messages
+        if m.get("role") != "system" and m is not last_user
+    ]
+    tail_tokens = sum(
+        _count_message_tokens(m.get("content", "")) for m in tail_msgs
+    )
+
+    if tail_tokens <= 0.3 * useful:
+        return req_body, tail_tokens, tail_tokens
+
+    summary = await _call_summarizer(tail_msgs, config)
+    if not summary:
+        return req_body, tail_tokens, tail_tokens
+
+    new_messages = [m for m in messages if m.get("role") == "system"]
+    new_messages.append({"role": "user", "content": f"[Context summary]:\n{summary}"})
+    new_messages.append(last_user)
+    data["messages"] = new_messages
+
+    new_body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    summary_tokens = len(summary) // 4
+    return new_body, tail_tokens, summary_tokens
+
+
 UPSTREAM_MAP: dict[str, str] = {
     "deepseek": "https://api.deepseek.com",
     "google": "https://generativelanguage.googleapis.com",
@@ -231,10 +356,33 @@ async def handle_reverse_proxy(
                     source_ip=source_ip, provider=provider,
                 )
 
+    # Tail compression: summarise history if it dominates the prompt
+    compression_applied = 0
+    tail_tokens_before = 0
+    tail_tokens_after = 0
+    if req_body and req_model:
+        try:
+            req_body, tail_tokens_before, tail_tokens_after = await summarise_addendums(
+                req_body
+            )
+            if tail_tokens_before != tail_tokens_after:
+                compression_applied = 1
+                logger.info(
+                    "tail_compressed",
+                    agent=agent_name,
+                    provider=provider,
+                    tail_before=tail_tokens_before,
+                    tail_after=tail_tokens_after,
+                )
+        except Exception:
+            pass
+
     # Build forwarded headers
     fwd_headers: dict[str, str] = {
         k: v for k, v in req_headers.items() if k not in _HOP_BY_HOP
     }
+    if req_body:
+        fwd_headers["content-length"] = str(len(req_body))
 
     upstream_url = upstream_base.rstrip("/") + rest_path
 
@@ -366,6 +514,9 @@ async def handle_reverse_proxy(
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
                 "cache_hit": 1 if cache_read else 0,
+                "compression_applied": compression_applied,
+                "tail_tokens_before": tail_tokens_before,
+                "tail_tokens_after": tail_tokens_after,
                 "route_applied": f"rproxy:{provider}",
                 "status_code": status_code,
                 "error": error_str,

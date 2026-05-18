@@ -123,6 +123,17 @@ class RequestLogDB:
         self._conn.execute(_CREATE_TABLE)
         for idx_sql in _CREATE_INDEXES:
             self._conn.execute(idx_sql)
+        for col, col_type in [
+            ("compression_applied", "INTEGER DEFAULT 0"),
+            ("tail_tokens_before", "INTEGER"),
+            ("tail_tokens_after", "INTEGER"),
+        ]:
+            try:
+                self._conn.execute(
+                    f"ALTER TABLE request_log ADD COLUMN {col} {col_type}"
+                )
+            except sqlite3.OperationalError:
+                pass
         self._conn.commit()
         logger.info("db_initialized", path=str(self._path))
 
