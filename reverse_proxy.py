@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -75,8 +76,6 @@ async def _call_summarizer(
 
     Uses DEEPSEEK_API_KEY and LINEMAN_IPROYAL_URL env vars. Returns None on any error.
     """
-    import os
-
     api_key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not api_key:
         return None
@@ -385,6 +384,19 @@ async def handle_reverse_proxy(
         fwd_headers["content-length"] = str(len(req_body))
 
     upstream_url = upstream_base.rstrip("/") + rest_path
+
+    # Inject Google API key if not already in URL
+    if provider == "google" and "key=" not in upstream_url:
+        try:
+            oc_path = os.path.expanduser("~/.openclaw/openclaw.json")
+            with open(oc_path) as _f:
+                _oc = json.load(_f)
+            gkey = _oc.get("models", {}).get("providers", {}).get("google", {}).get("apiKey", "")
+            if gkey:
+                sep = "&" if "?" in upstream_url else "?"
+                upstream_url = upstream_url + sep + "key=" + gkey
+        except Exception:
+            pass
 
     # Proxy pool selection
     use_proxy: str | None = None
