@@ -93,6 +93,7 @@ async def _call_summarizer(
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "Accept-Encoding": "identity",
             },
             json=payload,
             timeout=aiohttp.ClientTimeout(total=8.0),
