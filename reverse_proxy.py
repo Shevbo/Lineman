@@ -19,6 +19,11 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Lazy import to avoid circular deps — only used inside handle_reverse_proxy
+def _import_route_context() -> type:
+    from router import RouteContext
+    return RouteContext
+
 # Max estimated tokens for unnamed agents before blocking
 _UNNAMED_CTX_LIMIT = 80_000
 
@@ -218,6 +223,7 @@ async def handle_reverse_proxy(
     signals: Any = None,
     breaker: Any = None,
     dedup: Any = None,
+    router: Any = None,
 ) -> None:
     """Handle /proxy/{provider}/... — forward to upstream and log tokens."""
 
@@ -272,6 +278,33 @@ async def handle_reverse_proxy(
         is_streaming = bool(req_json.get("stream", False))
     except Exception:
         pass
+
+    # Router: rewrite provider/model for BATCH context → local Ollama on hoster
+    if router is not None and req_body and provider in ("deepseek", "google"):
+        try:
+            RouteContext = _import_route_context()
+            _rctx = router.detect_context(req_body, req_headers)
+            if _rctx == RouteContext.BATCH:
+                _batch_route = router.resolve(_rctx)
+                _new_upstream = _resolve_upstream(_batch_route.provider, config)
+                if _new_upstream:
+                    provider = _batch_route.provider
+                    upstream_base = _new_upstream
+                    try:
+                        _bd = json.loads(req_body)
+                        _bd["model"] = _batch_route.model
+                        req_body = json.dumps(_bd, ensure_ascii=False).encode()
+                        req_model = _batch_route.model
+                    except Exception:
+                        pass
+                    logger.info(
+                        "router_batch_rewrite",
+                        new_provider=provider,
+                        new_model=req_model,
+                        source_ip=source_ip,
+                    )
+        except Exception:
+            pass
 
     # Extract agent identity and prompt for signal attribution
     agent_name = _extract_agent_name(req_headers)

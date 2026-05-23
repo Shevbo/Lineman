@@ -1,4 +1,4 @@
-"""Tests for agent header and prompt snippet extraction."""
+"""Tests for agent header, prompt snippet extraction, and router batch rewrite."""
 from __future__ import annotations
 import json
 import sys
@@ -62,3 +62,43 @@ def test_extract_prompt_snippet_content_blocks():
         ]}
     ]}).encode()
     assert _extract_prompt_snippet(body) == "Explain this code"
+
+
+# ---------------------------------------------------------------------------
+# Router batch rewrite integration
+# ---------------------------------------------------------------------------
+
+BATCH_CONFIG = {
+    "reverse_proxy": {
+        "upstreams": {
+            "ollama-hoster": "http://10.66.0.7:11434",
+            "deepseek": "https://api.deepseek.com",
+        }
+    },
+    "routing": {},
+}
+
+
+def test_router_batch_route_resolves_to_ollama():
+    """Router.resolve(BATCH) must return ollama-hoster/llama3.2:3b from fallback chain."""
+    from router import Router, RouteContext
+    router = Router({})
+    route = router.resolve(RouteContext.BATCH)
+    assert route.provider == "ollama-hoster"
+    assert route.model == "llama3.2:3b"
+
+
+def test_router_batch_detect_from_cron_keyword():
+    """detect_context flags BATCH when body contains 'cron'."""
+    from router import Router, RouteContext
+    router = Router({})
+    body = json.dumps({"messages": [{"role": "user", "content": "run cron job now"}]}).encode()
+    ctx = router.detect_context(body, {})
+    assert ctx == RouteContext.BATCH
+
+
+def test_resolve_upstream_ollama_from_config():
+    """_resolve_upstream reads ollama-hoster URL from config correctly."""
+    from reverse_proxy import _resolve_upstream
+    url = _resolve_upstream("ollama-hoster", BATCH_CONFIG)
+    assert url == "http://10.66.0.7:11434"

@@ -370,6 +370,7 @@ class ProxyServer:
                             db=self._db, source_ip=source_ip, pool=self._pool,
                             config=self._config, signals=self._signals,
                             breaker=self._breaker, dedup=self._dedup,
+                            router=self._router,
                         )
                     finally:
                         self._llm_sem.release()
@@ -379,6 +380,7 @@ class ProxyServer:
                         db=self._db, source_ip=source_ip, pool=self._pool,
                         config=self._config, signals=self._signals,
                         breaker=self._breaker, dedup=self._dedup,
+                        router=self._router,
                     )
                 return
 
