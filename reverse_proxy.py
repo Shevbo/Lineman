@@ -16,13 +16,9 @@ from typing import Any
 
 import aiohttp
 import structlog
+from router import RouteContext
 
 logger = structlog.get_logger(__name__)
-
-# Lazy import to avoid circular deps — only used inside handle_reverse_proxy
-def _import_route_context() -> type:
-    from router import RouteContext
-    return RouteContext
 
 # Max estimated tokens for unnamed agents before blocking
 _UNNAMED_CTX_LIMIT = 80_000
@@ -279,28 +275,38 @@ async def handle_reverse_proxy(
     except Exception:
         pass
 
-    # Router: rewrite provider/model for BATCH context → local Ollama on hoster
-    if router is not None and req_body and provider in ("deepseek", "google"):
+    # Router: rewrite provider/model for BATCH context → local Ollama on hoster.
+    # Only applies to deepseek requests — Google body schema is incompatible with Ollama.
+    if router is not None and req_body and provider == "deepseek":
         try:
-            RouteContext = _import_route_context()
             _rctx = router.detect_context(req_body, req_headers)
             if _rctx == RouteContext.BATCH:
                 _batch_route = router.resolve(_rctx)
                 _new_upstream = _resolve_upstream(_batch_route.provider, config)
                 if _new_upstream:
-                    provider = _batch_route.provider
-                    upstream_base = _new_upstream
                     try:
                         _bd = json.loads(req_body)
                         _bd["model"] = _batch_route.model
-                        req_body = json.dumps(_bd, ensure_ascii=False).encode()
+                        _new_body = json.dumps(_bd, ensure_ascii=False).encode("utf-8")
+                        # Commit rewrite atomically — only after JSON parse succeeds
+                        req_body = _new_body
                         req_model = _batch_route.model
+                        provider = _batch_route.provider
+                        upstream_base = _new_upstream
+                        # Strip caller's auth header — Ollama does not need it
+                        req_headers.pop("authorization", None)
+                        logger.info(
+                            "router_batch_rewrite",
+                            new_provider=provider,
+                            new_model=req_model,
+                            source_ip=source_ip,
+                        )
                     except Exception:
                         pass
-                    logger.info(
-                        "router_batch_rewrite",
-                        new_provider=provider,
-                        new_model=req_model,
+                else:
+                    logger.warning(
+                        "router_batch_no_upstream",
+                        provider=_batch_route.provider,
                         source_ip=source_ip,
                     )
         except Exception:
