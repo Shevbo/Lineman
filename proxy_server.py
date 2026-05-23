@@ -830,6 +830,7 @@ class ProxyServer:
                     tg_body = await resp.json(content_type=None)
                 except Exception:
                     self._tg_rate[account] = 0.0
+                    self._tg_msg_dedup.pop(_dedup_key, None)  # allow retry
                     self._send_json_response(wr, 503, {"ok": False, "error": "telegram returned non-JSON"})
                     await wr.drain()
                     wr.close()
@@ -840,17 +841,20 @@ class ProxyServer:
                         "message_id": tg_body.get("result", {}).get("message_id"),
                     })
                 else:
-                    # Reset rate on failure so caller can retry
+                    # Reset rate and dedup on failure so caller can retry
                     self._tg_rate[account] = 0.0
+                    self._tg_msg_dedup.pop(_dedup_key, None)
                     self._send_json_response(wr, 503, {
                         "ok": False,
                         "error": f"telegram error: {tg_body.get('description', 'unknown')}",
                     })
         except asyncio.TimeoutError:
             self._tg_rate[account] = 0.0
+            self._tg_msg_dedup.pop(_dedup_key, None)
             self._send_json_response(wr, 504, {"ok": False, "error": "telegram timeout"})
         except Exception:
             self._tg_rate[account] = 0.0
+            self._tg_msg_dedup.pop(_dedup_key, None)
             self._send_json_response(wr, 503, {"ok": False, "error": "upstream error"})
 
         await wr.drain()
