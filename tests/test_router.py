@@ -51,10 +51,11 @@ def test_decisions_log_header_override():
 
 def test_decisions_log_auto_detected():
     router = Router(SAMPLE_CONFIG)
+    # "background task" matches batch_keywords → BATCH context
     router.detect_context(b'{"messages":[{"role":"user","content":"background task"}]}', {})
     dec = router.recent_decisions()[0]
     assert dec["triggered_by"] == "body"
-    assert dec["context"] == "background"
+    assert dec["context"] == "batch"
 
 
 def test_decisions_newest_first():

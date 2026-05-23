@@ -19,6 +19,11 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Max estimated tokens for unnamed agents before blocking
+_UNNAMED_CTX_LIMIT = 80_000
+
+_UNNAMED_CTX_BLOCKED_HOSTS = frozenset({"smain", "hoster", "cloud"})
+
 
 def _extract_agent_name(headers: dict[str, str]) -> str | None:
     """Return X-Agent-Name header value, or None."""
@@ -156,7 +161,16 @@ async def summarise_addendums(
         _count_message_tokens(m.get("content", "")) for m in tail_msgs
     )
 
-    if tail_tokens <= 0.3 * useful:
+    # Compress when tail is large enough to warrant it.
+    # Three-part guard (skip if ALL are true would compress too early on small agents):
+    #   1. Minimum absolute size 1500 tokens — don't compress tiny histories.
+    #   2. Proportional threshold 30% of useful — prevents aggressive compression
+    #      on agents with tiny system prompts (e.g. 200-token useful → skip < 60 was
+    #      triggering on every turn; now requires tail > 30% of useful).
+    #   3. Absolute cap 6K — always compress before the 80K block fires.
+    if tail_tokens < 1_500:
+        return req_body, tail_tokens, tail_tokens
+    if tail_tokens <= 0.3 * useful and tail_tokens < 6_000:
         return req_body, tail_tokens, tail_tokens
 
     summary = await _call_summarizer(tail_msgs, config)
@@ -176,13 +190,13 @@ async def summarise_addendums(
 UPSTREAM_MAP: dict[str, str] = {
     "deepseek": "https://api.deepseek.com",
     "google": "https://generativelanguage.googleapis.com",
-    "anthropic": "https://api.anthropic.com",
-    "openai": "https://api.openai.com",
 }
 
 _READ_TIMEOUT = 30.0
 _STREAM_TIMEOUT = 180.0
 _BODY_MAX = 4 * 1024 * 1024
+_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503})
+_MAX_UPSTREAM_RETRIES = 2
 _HOP_BY_HOP = frozenset({
     "host", "connection", "proxy-connection", "keep-alive",
     "proxy-authenticate", "proxy-authorization", "te",
@@ -262,6 +276,34 @@ async def handle_reverse_proxy(
     # Extract agent identity and prompt for signal attribution
     agent_name = _extract_agent_name(req_headers)
     prompt_snippet = _extract_prompt_snippet(req_body)
+
+    # Context limit — block unnamed agents with runaway context
+    if not agent_name and req_body:
+        from db import source_host_from_ip as _shost_fn
+        _src = _shost_fn(source_ip)
+        if _src in _UNNAMED_CTX_BLOCKED_HOSTS:
+            try:
+                _msgs = json.loads(req_body).get("messages") or []
+                _est = sum(_count_message_tokens(m.get("content", "")) for m in _msgs)
+            except Exception:
+                _est = len(req_body) // 4
+            if _est > _UNNAMED_CTX_LIMIT:
+                logger.warning(
+                    "unnamed_ctx_limit_blocked",
+                    source_ip=source_ip,
+                    source_host=_src,
+                    estimated_tokens=_est,
+                    provider=provider,
+                )
+                _detail = (
+                    f"[LINEMAN GUARD] Контекст ~{_est // 1000}K токенов "
+                    f"(лимит {_UNNAMED_CTX_LIMIT // 1000}K). "
+                    "Запрос заблокирован. Для анализа нужны детали: "
+                    "какую задачу ты сейчас решаешь, какой последний результат, "
+                    "на чём застрял? Сохрани ключевые факты и начни новую сессию."
+                )
+                await _send_json_error(writer, 429, _detail)
+                return
 
     # Circuit breaker — check before forwarding
     if breaker is not None:
@@ -381,6 +423,8 @@ async def handle_reverse_proxy(
     fwd_headers: dict[str, str] = {
         k: v for k, v in req_headers.items() if k not in _HOP_BY_HOP
     }
+    # Restrict to encodings aiohttp can decompress (no brotli support)
+    fwd_headers["accept-encoding"] = "gzip, deflate, identity"
     if req_body:
         fwd_headers["content-length"] = str(len(req_body))
 
@@ -398,6 +442,12 @@ async def handle_reverse_proxy(
                 upstream_url = upstream_url + sep + "key=" + gkey
         except Exception:
             pass
+
+    # Inject DeepSeek API key if not already in Authorization header
+    if provider == "deepseek" and "authorization" not in {k.lower() for k in fwd_headers}:
+        ds_key = os.environ.get("DEEPSEEK_API_KEY", "")
+        if ds_key:
+            fwd_headers["authorization"] = f"Bearer {ds_key}"
 
     # Proxy pool selection
     use_proxy: str | None = None
@@ -417,80 +467,108 @@ async def handle_reverse_proxy(
     status_code = 502
     error_str: str | None = None
 
-    try:
-        req_kwargs: dict[str, Any] = dict(
-            method=method,
-            url=upstream_url,
-            headers=fwd_headers,
-            data=req_body or None,
-            timeout=aiohttp.ClientTimeout(total=_STREAM_TIMEOUT),
-        )
-        if use_proxy:
-            req_kwargs["proxy"] = use_proxy
+    req_kwargs: dict[str, Any] = dict(
+        method=method,
+        url=upstream_url,
+        headers=fwd_headers,
+        data=req_body or None,
+        timeout=aiohttp.ClientTimeout(total=_STREAM_TIMEOUT),
+    )
+    if use_proxy:
+        req_kwargs["proxy"] = use_proxy
 
-        async with session.request(**req_kwargs) as resp:
-            status_code = resp.status
-            ct = resp.headers.get("Content-Type", "")
-            uses_sse = "text/event-stream" in ct or is_streaming
+    for _attempt in range(_MAX_UPSTREAM_RETRIES + 1):
+        _final = (_attempt == _MAX_UPSTREAM_RETRIES)
+        try:
+            async with session.request(**req_kwargs) as resp:
+                status_code = resp.status
+                ct = resp.headers.get("Content-Type", "")
+                uses_sse = "text/event-stream" in ct or is_streaming
 
-            # Build response header block (strip hop-by-hop + encoding headers)
-            resp_hdr_lines = ""
-            for k, v in resp.headers.items():
-                if k.lower() in ("transfer-encoding", "content-encoding", "content-length"):
+                # Transparent retry on 5xx: drain body, back off, retry
+                if status_code in _RETRYABLE_STATUSES and not _final:
+                    await resp.read()
+                    _delay = min(1.5 ** _attempt, 8.0)
+                    logger.warning(
+                        "rproxy_5xx_retry",
+                        status=status_code,
+                        attempt=_attempt + 1,
+                        provider=provider,
+                        delay=round(_delay, 1),
+                    )
+                    await asyncio.sleep(_delay)
                     continue
-                resp_hdr_lines += f"{k}: {v}\r\n"
 
-            if uses_sse:
-                # Streaming: re-encode as chunked, capture tail for usage extraction
-                header_block = (
-                    f"HTTP/1.1 {status_code} {resp.reason or ''}\r\n"
-                    + resp_hdr_lines
-                    + "Transfer-Encoding: chunked\r\n\r\n"
+                # Build response header block (strip hop-by-hop + encoding headers)
+                resp_hdr_lines = ""
+                for k, v in resp.headers.items():
+                    if k.lower() in ("transfer-encoding", "content-encoding", "content-length"):
+                        continue
+                    resp_hdr_lines += f"{k}: {v}\r\n"
+
+                if uses_sse:
+                    # Streaming: re-encode as chunked, capture tail for usage extraction
+                    header_block = (
+                        f"HTTP/1.1 {status_code} {resp.reason or ''}\r\n"
+                        + resp_hdr_lines
+                        + "Transfer-Encoding: chunked\r\n\r\n"
+                    )
+                    writer.write(header_block.encode())
+                    await writer.drain()
+
+                    tail_buf = bytearray()
+                    async for chunk in resp.content.iter_chunked(8192):
+                        if chunk:
+                            writer.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+                            await writer.drain()
+                            tail_buf.extend(chunk)
+                            if len(tail_buf) > 8192:
+                                tail_buf = tail_buf[-8192:]
+
+                    writer.write(b"0\r\n\r\n")
+                    await writer.drain()
+
+                    tokens_in, tokens_out, cache_read = _extract_usage_sse(bytes(tail_buf))
+                else:
+                    # Non-streaming: buffer full response, extract usage
+                    resp_body = await resp.read()
+
+                    header_block = (
+                        f"HTTP/1.1 {status_code} {resp.reason or ''}\r\n"
+                        + resp_hdr_lines
+                        + f"Content-Length: {len(resp_body)}\r\n\r\n"
+                    )
+                    writer.write(header_block.encode())
+                    writer.write(resp_body)
+                    await writer.drain()
+
+                    tokens_in, tokens_out, cache_read = _extract_usage_json(resp_body)
+
+                    # Store in dedup cache (non-streaming only)
+                    if dedup is not None and _dedup_key and status_code == 200:
+                        dedup.store(_dedup_key, status_code, resp_body)
+
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+            error_str = str(exc)
+            if not _final:
+                _delay = min(1.5 ** _attempt, 8.0)
+                logger.warning(
+                    "rproxy_exc_retry",
+                    attempt=_attempt + 1,
+                    provider=provider,
+                    error=str(exc),
+                    delay=round(_delay, 1),
                 )
-                writer.write(header_block.encode())
-                await writer.drain()
-
-                tail_buf = bytearray()
-                async for chunk in resp.content.iter_chunked(8192):
-                    if chunk:
-                        writer.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
-                        await writer.drain()
-                        tail_buf.extend(chunk)
-                        if len(tail_buf) > 8192:
-                            tail_buf = tail_buf[-8192:]
-
-                writer.write(b"0\r\n\r\n")
-                await writer.drain()
-
-                tokens_in, tokens_out, cache_read = _extract_usage_sse(bytes(tail_buf))
-            else:
-                # Non-streaming: buffer full response, extract usage
-                resp_body = await resp.read()
-
-                header_block = (
-                    f"HTTP/1.1 {status_code} {resp.reason or ''}\r\n"
-                    + resp_hdr_lines
-                    + f"Content-Length: {len(resp_body)}\r\n\r\n"
-                )
-                writer.write(header_block.encode())
-                writer.write(resp_body)
-                await writer.drain()
-
-                tokens_in, tokens_out, cache_read = _extract_usage_json(resp_body)
-
-                # Store in dedup cache (non-streaming only)
-                if dedup is not None and _dedup_key and status_code == 200:
-                    dedup.store(_dedup_key, status_code, resp_body)
-
-    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
-        error_str = str(exc)
-        logger.warning("rproxy_upstream_error", provider=provider,
-                       url=upstream_url, error=error_str)
-        await _send_json_error(writer, 502, f"Upstream error: {exc}")
-    except Exception as exc:
-        error_str = str(exc)
-        logger.exception("rproxy_unexpected_error", provider=provider)
-        await _send_json_error(writer, 500, "Internal proxy error")
+                await asyncio.sleep(_delay)
+                continue
+            logger.warning("rproxy_upstream_error", provider=provider,
+                           url=upstream_url, error=error_str)
+            await _send_json_error(writer, 502, f"Upstream error: {exc}")
+        except Exception as exc:
+            error_str = str(exc)
+            logger.exception("rproxy_unexpected_error", provider=provider)
+            await _send_json_error(writer, 500, "Internal proxy error")
+        break
 
     latency_ms = int((time.monotonic() - t_start) * 1000)
 

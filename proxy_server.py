@@ -7,6 +7,7 @@ to the correct upstream, injects API keys, and logs everything.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -54,6 +55,8 @@ REMOTE_SSH_CONFIG = {
         "agent_map": {
             "hoster": "main", # Hoster on hoster is agent 'main'
             "shopin": "shopin",
+            "resumewriter": "resumewriter",
+            "inbox": "inbox",
         }
     },
     "vibe": { # vibe is boris@10.66.0.6 (Windows)
@@ -62,6 +65,14 @@ REMOTE_SSH_CONFIG = {
         "key_path": "~/.ssh/id_ed25519", # Assumes this key is authorized on vibe
         "agent_map": {
             "virtual-boris-vibe": "vboris2", # VBoris2 on vibe is agent 'vboris2'
+        }
+    },
+    "cloud": { # cloud is shevbo@10.66.0.3 (shevbo-cloud) — stable VPS, usually online
+        "user": "shevbo",
+        "host_ip": "10.66.0.3",
+        "key_path": "~/.ssh/id_ed25519",
+        "agent_map": {
+            "tank-3": "main", # Tank 3 on cloud is agent 'main'
         }
     },
     "keymaster": { # Keymaster API service is local on smain
@@ -171,6 +182,9 @@ class ProxyServer:
 
         # Telegram rate limiter: account → last send timestamp
         self._tg_rate: dict[str, float] = {}
+        # Telegram message dedup: (account:chat_id:text_hash) → timestamp
+        # Prevents duplicate sends when multiple nodes respond to the same message.
+        self._tg_msg_dedup: dict[str, float] = {}
         self._tg_oc_path = Path.home() / ".openclaw" / "openclaw.json"
 
         # Circuit breaker (per-source_ip sliding window)
@@ -185,10 +199,9 @@ class ProxyServer:
         self._llm_queue_timeout: float = llm_q.get("queue_timeout_s", 30.0)
         self._llm_hosts: frozenset[str] = frozenset(llm_q.get("hosts", [
             "api.deepseek.com", "generativelanguage.googleapis.com",
-            "api.anthropic.com", "api.openai.com", "openrouter.ai",
         ]))
         self._llm_providers: frozenset[str] = frozenset(llm_q.get("providers", [
-            "deepseek", "google", "anthropic", "openai", "openrouter",
+            "deepseek", "google",
         ]))
 
     async def start(self) -> None:
@@ -759,6 +772,23 @@ class ProxyServer:
             wr.close()
             logger.warning("tg_rate_limited", account=account, retry_after=retry_after)
             return
+
+        # Message dedup: drop duplicate sends from multiple nodes within 60s.
+        MSG_DEDUP_TTL = 60.0
+        _text_hash = hashlib.sha256(f"{chat_id}:{text}".encode()).hexdigest()[:16]
+        _dedup_key = f"{account}:{_text_hash}"
+        _last_sent = self._tg_msg_dedup.get(_dedup_key, 0.0)
+        # Evict stale entries periodically to prevent unbounded growth
+        if len(self._tg_msg_dedup) > 500:
+            cutoff = now - MSG_DEDUP_TTL
+            self._tg_msg_dedup = {k: v for k, v in self._tg_msg_dedup.items() if v > cutoff}
+        if now - _last_sent < MSG_DEDUP_TTL:
+            logger.info("tg_msg_dedup_dropped", account=account, chat_id=chat_id)
+            self._send_json_response(wr, 200, {"ok": True, "message_id": -1, "dedup": True})
+            await wr.drain()
+            wr.close()
+            return
+        self._tg_msg_dedup[_dedup_key] = now
 
         # Load token from openclaw.json
         try:

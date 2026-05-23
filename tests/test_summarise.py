@@ -69,8 +69,7 @@ async def test_skip_fewer_than_4_messages():
 @pytest.mark.asyncio
 async def test_skip_when_tail_within_threshold():
     from reverse_proxy import summarise_addendums
-    # system=1000 chars (250 tokens), last_user=400 chars (100 tokens) → useful=350
-    # tail=assistant 200 chars (50 tokens) → 50 < 0.3*350 = 105 → skip
+    # tail ≈ 75 tokens < 1500-token minimum → skip
     body = _body(
         {"role": "system", "content": "S" * 1000},
         {"role": "user", "content": "Q1" * 100},
@@ -85,7 +84,8 @@ async def test_skip_when_tail_within_threshold():
 @pytest.mark.asyncio
 async def test_compress_when_tail_exceeds_threshold():
     from reverse_proxy import summarise_addendums
-    tail_content = "T" * 400
+    # 4 tail messages × 1600 chars = 6400 chars ÷ 4 = 1600 tokens > 1500-token minimum
+    tail_content = "T" * 1600
     body = _body(
         {"role": "system", "content": "S" * 100},
         {"role": "user", "content": tail_content},
