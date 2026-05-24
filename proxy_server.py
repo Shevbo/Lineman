@@ -63,6 +63,8 @@ REMOTE_SSH_CONFIG = {
         "user": "boris",
         "host_ip": "10.66.0.6",
         "key_path": "~/.ssh/id_ed25519", # Assumes this key is authorized on vibe
+        # Windows: prevent Node.js from routing localhost requests through iProyal system proxy
+        "cmd_prefix": 'set "NO_PROXY=localhost,127.0.0.1,::1" && ',
         "agent_map": {
             "virtual-boris-vibe": "vboris2", # VBoris2 on vibe is agent 'vboris2'
         }
@@ -673,12 +675,13 @@ class ProxyServer:
             
             try:
                 escaped_msg = message_text.replace('"', '\\"')
+                cmd_prefix = ssh_cfg.get("cmd_prefix", "")
                 ssh_cmd = [
                     "ssh",
                     "-o", "ConnectTimeout=15",
                     "-i", os.path.expanduser(ssh_cfg["key_path"]),
                     f"{ssh_cfg['user']}@{ssh_cfg['host_ip']}",
-                    f'openclaw agent --agent {remote_agent_id} --message "{escaped_msg}" --json'
+                    f'{cmd_prefix}openclaw agent --agent {remote_agent_id} --message "{escaped_msg}" --json'
                 ]
                 logger.debug("remote_agent_call", cmd=" ".join(ssh_cmd))
                 
