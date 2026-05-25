@@ -272,6 +272,13 @@ async def handle_reverse_proxy(
         req_json = json.loads(req_body)
         req_model = req_json.get("model", "")
         is_streaming = bool(req_json.get("stream", False))
+        # Strip "provider/" prefix from model name if present (e.g. "deepseek/deepseek-v4-flash" → "deepseek-v4-flash").
+        # OpenClaw sends composite model strings; upstream APIs expect bare model names.
+        if "/" in req_model and req_body:
+            bare_model = req_model.split("/", 1)[1]
+            req_json["model"] = bare_model
+            req_body = json.dumps(req_json, ensure_ascii=False).encode("utf-8")
+            req_model = bare_model
     except Exception:
         pass
 
