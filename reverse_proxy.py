@@ -268,6 +268,7 @@ async def handle_reverse_proxy(
     # Extract metadata from request JSON
     req_model = ""
     is_streaming = False
+    req_json: dict | None = None
     try:
         req_json = json.loads(req_body)
         req_model = req_json.get("model", "")
@@ -284,7 +285,9 @@ async def handle_reverse_proxy(
 
     # Router: rewrite provider/model for BATCH context → local Ollama on hoster.
     # Only applies to deepseek requests — Google body schema is incompatible with Ollama.
-    if router is not None and req_body and provider == "deepseek":
+    # Skip if request contains tools — Ollama rejects tool-schema requests.
+    _has_tools = bool(req_json.get("tools")) if req_json else False
+    if router is not None and req_body and provider == "deepseek" and not _has_tools:
         try:
             _rctx = router.detect_context(req_body, req_headers)
             if _rctx == RouteContext.BATCH:
