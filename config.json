@@ -1,6 +1,26 @@
 {
   "services": [
     {
+      "id": "lm-studio",
+      "name": "LM Studio (hyperv via smain tunnel)",
+      "type": "openai",
+      "base_url": "http://127.0.0.1:1234",
+      "health_endpoint": "/v1/models",
+      "timeout": 30,
+      "interval": 60,
+      "proxy": false
+    },
+    {
+      "id": "ollama-hoster",
+      "name": "Ollama (hoster, CPU)",
+      "type": "openai",
+      "base_url": "http://10.66.0.7:11434",
+      "health_endpoint": "/api/tags",
+      "timeout": 10,
+      "interval": 60,
+      "proxy": false
+    },
+    {
       "id": "deepseek-flash",
       "name": "DeepSeek Flash",
       "type": "deepseek",
@@ -11,7 +31,7 @@
       "openclaw_config_path": "",
       "timeout": 15,
       "interval": 60,
-      "proxy": null
+      "proxy": true
     },
     {
       "id": "deepseek-pro",
@@ -24,7 +44,7 @@
       "openclaw_config_path": "",
       "timeout": 15,
       "interval": 60,
-      "proxy": null
+      "proxy": true
     },
     {
       "id": "gemini-flash",
@@ -117,6 +137,14 @@
     "webSearch": {
       "provider": "gemini",
       "model": "gemini-2.5-flash"
+    },
+    "local": {
+      "provider": "lm-studio",
+      "model": "google/gemma-4-e4b"
+    },
+    "batch": {
+      "provider": "ollama-hoster",
+      "model": "llama3.2:3b"
     }
   },
   "proxy_server": {
@@ -129,12 +157,12 @@
       "queue_timeout_s": 30,
       "hosts": [
         "api.deepseek.com",
-        "generativelanguage.googleapis.com",
-        "api.anthropic.com",
-        "api.openai.com",
-        "openrouter.ai"
+        "generativelanguage.googleapis.com"
       ],
-      "providers": ["deepseek", "google", "anthropic", "openai", "openrouter"]
+      "providers": [
+        "deepseek",
+        "google"
+      ]
     }
   },
   "analytics": {
@@ -165,24 +193,67 @@
     "updated": "2026-05-17",
     "note": "Все цены в USD за 1M токенов",
     "models": {
-      "deepseek-v4-flash":              {"in": 0.14,  "out": 0.28,  "cache_hit": 0.0028, "ctx_k": 1024, "note": "Скидка 75% до 31.05.2026"},
-      "deepseek-v4-pro":                {"in": 0.435, "out": 0.87,  "cache_hit": 0.0036, "ctx_k": 1024, "note": "Reasoning. Скидка 75% до 31.05.2026"},
-      "gemini-2.5-flash":               {"in": 0.15,  "out": 0.60,  "ctx_k": 1024},
-      "gemini-2.5-pro":                 {"in": 1.25,  "out": 10.0,  "ctx_k": 2048, "note": ">200K: $2.50/$15"},
-      "gemini-3.1-pro-preview":         {"in": 2.0,   "out": 12.0,  "ctx_k": 1024, "note": ">200K: $4/$18"},
-      "claude-haiku-4-5-20251001":      {"in": 1.0,   "out": 5.0,   "cache_hit": 0.10, "ctx_k": 200},
-      "claude-sonnet-4-6":              {"in": 3.0,   "out": 15.0,  "cache_hit": 0.30, "ctx_k": 200},
-      "claude-opus-4-7":                {"in": 5.0,   "out": 25.0,  "cache_hit": 0.50, "ctx_k": 1024},
-      "gpt-4o-mini":                    {"in": 0.15,  "out": 0.60,  "ctx_k": 128},
-      "gpt-4o":                         {"in": 2.5,   "out": 10.0,  "ctx_k": 128},
-      "gpt-4.1":                        {"in": 2.0,   "out": 8.0,   "ctx_k": 1047},
-      "o4-mini":                        {"in": 1.1,   "out": 4.4,   "ctx_k": 200},
-      "o3":                             {"in": 2.0,   "out": 8.0,   "ctx_k": 200},
-      "google/gemini-2.0-flash-lite-001": {"in": 0.10, "out": 0.40, "ctx_k": 1024},
-      "anthropic/claude-opus-4.7":      {"in": 5.0,   "out": 25.0,  "cache_hit": 0.50, "ctx_k": 1024},
-      "mistralai/mistral-medium-3-5":   {"in": 1.5,   "out": 7.5,   "ctx_k": 128},
-      "llama3.1:8b":                    {"in": 0.0,   "out": 0.0,   "ctx_k": 128, "note": "Local Ollama"},
-      "llama3.2-vision:11b":            {"in": 0.0,   "out": 0.0,   "ctx_k": 128, "note": "Local Ollama"}
+      "deepseek-v4-flash": {
+        "in": 0.14,
+        "out": 0.28,
+        "cache_hit": 0.0028,
+        "ctx_k": 1024,
+        "note": "Скидка 75% до 31.05.2026"
+      },
+      "deepseek-v4-pro": {
+        "in": 0.435,
+        "out": 0.87,
+        "cache_hit": 0.0036,
+        "ctx_k": 1024,
+        "note": "Reasoning. Скидка 75% до 31.05.2026"
+      },
+      "gemini-2.5-flash": {
+        "in": 0.15,
+        "out": 0.6,
+        "ctx_k": 1024
+      },
+      "gemini-2.5-pro": {
+        "in": 1.25,
+        "out": 10.0,
+        "ctx_k": 2048,
+        "note": ">200K: $2.50/$15"
+      },
+      "gemini-3.1-pro-preview": {
+        "in": 2.0,
+        "out": 12.0,
+        "ctx_k": 1024,
+        "note": ">200K: $4/$18"
+      },
+      "llama3.1:8b": {
+        "in": 0.0,
+        "out": 0.0,
+        "ctx_k": 128,
+        "note": "Local Ollama"
+      },
+      "llama3.2-vision:11b": {
+        "in": 0.0,
+        "out": 0.0,
+        "ctx_k": 128,
+        "note": "Local Ollama"
+      },
+      "google/gemma-4-e4b": {
+        "in": 0.0,
+        "out": 0.0,
+        "ctx_k": 8,
+        "note": "LM Studio hyperv"
+      },
+      "gemma-4-26b-a4b-it-imatrix": {
+        "in": 0.0,
+        "out": 0.0,
+        "ctx_k": 8,
+        "note": "LM Studio hyperv"
+      },
+      "deepseek-r1-distill-qwen-14b": {
+        "in": 0.0,
+        "out": 0.0,
+        "ctx_k": 8,
+        "note": "LM Studio hyperv"
+      }
     }
   },
   "dedup_cache": {
@@ -203,11 +274,10 @@
   },
   "reverse_proxy": {
     "upstreams": {
+      "lm-studio": "http://127.0.0.1:1234",
+      "ollama-hoster": "http://10.66.0.7:11434/v1",
       "deepseek": "https://api.deepseek.com",
-      "google": "https://generativelanguage.googleapis.com",
-      "anthropic": "https://api.anthropic.com",
-      "openai": "https://api.openai.com",
-      "openrouter": "https://openrouter.ai/api/v1"
+      "google": "https://generativelanguage.googleapis.com"
     }
   },
   "agents": {
@@ -285,105 +355,25 @@
   "proxy_pool": {
     "proxies": [
       {
-        "id": "proxy1",
-        "name": "Datacenter 45.155.200.232",
-        "url": "${LINEMAN_PROXY1_URL}",
-        "priority": 3,
-        "enabled": true
-      },
-      {
         "id": "iproyal",
-        "name": "iProyal Residential",
+        "name": "iProyal ISP Dedicated",
         "url": "${LINEMAN_IPROYAL_URL}",
-        "priority": 1,
-        "enabled": true
-      },
-      {
-        "id": "claude-connect",
-        "name": "Claude Connect CF Worker",
-        "url": "wss://claude-connect.bshevelev75.workers.dev",
         "priority": 1,
         "enabled": true
       }
     ],
     "routes": [
       {
-        "comment": "Claude/Anthropic — iProyal ISP (geo-unblocked)",
+        "comment": "Internal WireGuard federation nodes — direct, iProyal can't reach 10.66.0.0/24",
         "hosts": [
-          "claude.ai",
-          "*.claude.ai",
-          "claude.com",
-          "*.claude.com",
-          "anthropic.com",
-          "*.anthropic.com",
-          "featureassets.org",
-          "160.79.104.0/21",
-          "204.236.128.0/17"
+          "10.66.0.0/24",
+          "127.0.0.1",
+          "localhost"
         ],
-        "proxies": [
-          "iproyal"
-        ]
+        "proxies": []
       },
       {
-        "comment": "Google APIs and Telegram need a proxy from Russia",
-        "hosts": [
-          "*.googleapis.com",
-          "www.googleapis.com",
-          "gmail.googleapis.com",
-          "docs.googleapis.com",
-          "api.telegram.org"
-        ],
-        "proxies": [
-          "iproyal"
-        ]
-      },
-      {
-        "comment": "LLM APIs — через iProyal (claude-connect WS не совместим с HTTP reverse proxy)",
-        "hosts": [
-          "api.deepseek.com",
-          "api.anthropic.com",
-          "api.openai.com",
-          "api.cohere.com",
-          "openrouter.ai"
-        ],
-        "proxies": [
-          "iproyal"
-        ]
-      },
-      {
-        "comment": "CF Workers — через iProyal (claude-connect не может подключаться к *.workers.dev, anti-loop)",
-        "hosts": [
-          "*.workers.dev"
-        ],
-        "proxies": [
-          "iproyal"
-        ]
-      },
-      {
-        "comment": "Cloudflare CDN IPs — CF Worker cannot connect to own infra (anti-loop), use iProyal",
-        "hosts": [
-          "104.16.0.0/13",
-          "104.24.0.0/14",
-          "172.64.0.0/13",
-          "162.158.0.0/15",
-          "198.41.128.0/17",
-          "197.234.240.0/22",
-          "190.93.240.0/20",
-          "188.114.96.0/20",
-          "141.101.64.0/18",
-          "108.162.192.0/18",
-          "173.245.48.0/20",
-          "103.21.244.0/22",
-          "103.22.200.0/22",
-          "103.31.4.0/22",
-          "131.0.72.0/22"
-        ],
-        "proxies": [
-          "iproyal"
-        ]
-      },
-      {
-        "comment": "Default: all traffic via iProyal (claude-connect WS tunnel returns 400 on HTTP requests — unusable as default)",
+        "comment": "All traffic via iProyal — Telegram/Google blocked in RU, LLM APIs need geo-bypass",
         "hosts": [
           "*"
         ],
