@@ -197,12 +197,145 @@ _READ_TIMEOUT = 30.0
 _STREAM_TIMEOUT = 180.0
 _BODY_MAX = 4 * 1024 * 1024
 _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503})
+
+# Paths that bypass body buffering — streamed directly to upstream.
+# Used for large uploads (Gemini File API, etc.) where body can exceed _BODY_MAX.
+_PASSTHROUGH_PREFIXES: tuple[str, ...] = (
+    "/upload/",  # Google File API: /upload/v1beta/files
+)
 _MAX_UPSTREAM_RETRIES = 2
 _HOP_BY_HOP = frozenset({
     "host", "connection", "proxy-connection", "keep-alive",
     "proxy-authenticate", "proxy-authorization", "te",
     "trailers", "transfer-encoding", "upgrade",
 })
+
+
+async def _stream_body(reader: asyncio.StreamReader, content_length: int):
+    """Async generator: yield body chunks from TCP stream without buffering all."""
+    remaining = content_length
+    while remaining > 0:
+        chunk = await asyncio.wait_for(
+            reader.read(min(65536, remaining)), timeout=300
+        )
+        if not chunk:
+            break
+        yield chunk
+        remaining -= len(chunk)
+
+
+async def _handle_passthrough(
+    method: str,
+    provider: str,
+    rest_path: str,
+    upstream_base: str,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    session: aiohttp.ClientSession,
+    *,
+    pool: Any = None,
+    config: dict[str, Any] | None = None,
+    source_ip: str = "",
+) -> None:
+    """Streaming passthrough for large uploads — pipes body without buffering.
+
+    Skips body inspection, circuit breaker, dedup, and token counting.
+    Logs only: provider, path, content_length, status, latency.
+    """
+    # Read headers
+    req_headers: dict[str, str] = {}
+    try:
+        while True:
+            line = await asyncio.wait_for(reader.readline(), timeout=_READ_TIMEOUT)
+            if line in (b"\r\n", b"\n", b""):
+                break
+            decoded = line.decode("utf-8", errors="replace").strip()
+            if ": " in decoded:
+                k, v = decoded.split(": ", 1)
+                req_headers[k.lower()] = v
+    except asyncio.TimeoutError:
+        await _send_json_error(writer, 408, "Timeout reading headers")
+        return
+
+    content_length = int(req_headers.get("content-length", "0") or "0")
+
+    # Build upstream URL
+    upstream_url = upstream_base.rstrip("/") + rest_path
+
+    # Inject Google API key
+    if provider == "google" and "key=" not in upstream_url:
+        try:
+            oc_path = os.path.expanduser("~/.openclaw/openclaw.json")
+            with open(oc_path) as _f:
+                _oc = json.load(_f)
+            gkey = (_oc.get("models", {}).get("providers", {})
+                    .get("google", {}).get("apiKey", ""))
+            if gkey:
+                sep = "&" if "?" in upstream_url else "?"
+                upstream_url += sep + "key=" + gkey
+        except Exception:
+            pass
+
+    fwd_headers = {k: v for k, v in req_headers.items() if k not in _HOP_BY_HOP}
+    fwd_headers["accept-encoding"] = "gzip, deflate, identity"
+    if content_length:
+        fwd_headers["content-length"] = str(content_length)
+
+    # Proxy pool
+    use_proxy: str | None = None
+    if pool is not None:
+        try:
+            from urllib.parse import urlparse
+            up_host = urlparse(upstream_base).hostname or ""
+            use_proxy, _ = pool.select(up_host)
+        except Exception:
+            pass
+
+    t_start = time.monotonic()
+    status_code = 502
+
+    body_stream = _stream_body(reader, content_length) if content_length > 0 else None
+    req_kwargs: dict[str, Any] = dict(
+        method=method,
+        url=upstream_url,
+        headers=fwd_headers,
+        data=body_stream,
+        timeout=aiohttp.ClientTimeout(total=600),
+    )
+    if use_proxy:
+        req_kwargs["proxy"] = use_proxy
+
+    try:
+        async with session.request(**req_kwargs) as resp:
+            status_code = resp.status
+            resp_body = await resp.read()
+            resp_hdr_lines = "".join(
+                f"{k}: {v}\r\n" for k, v in resp.headers.items()
+                if k.lower() not in ("transfer-encoding", "content-encoding", "content-length")
+            )
+            header_block = (
+                f"HTTP/1.1 {status_code} {resp.reason or ''}\r\n"
+                + resp_hdr_lines
+                + f"Content-Length: {len(resp_body)}\r\n\r\n"
+            )
+            writer.write(header_block.encode())
+            writer.write(resp_body)
+            await writer.drain()
+    except Exception as exc:
+        await _send_json_error(writer, 502, f"Passthrough upstream error: {exc}")
+        return
+
+    latency_ms = round((time.monotonic() - t_start) * 1000)
+    logger.info(
+        "passthrough",
+        provider=provider,
+        path=rest_path,
+        method=method,
+        content_length=content_length,
+        status=status_code,
+        latency_ms=latency_ms,
+        source_ip=source_ip,
+    )
 
 
 async def handle_reverse_proxy(
@@ -235,6 +368,15 @@ async def handle_reverse_proxy(
     upstream_base = _resolve_upstream(provider, config)
     if not upstream_base:
         await _send_json_error(writer, 400, f"Unknown provider: {provider!r}")
+        return
+
+    # Streaming passthrough for large uploads (no body buffering or inspection)
+    if any(rest_path.startswith(p) for p in _PASSTHROUGH_PREFIXES):
+        await _handle_passthrough(
+            method, provider, rest_path, upstream_base,
+            reader, writer, session,
+            pool=pool, config=config, source_ip=source_ip,
+        )
         return
 
     # Read remaining HTTP request headers from the TCP stream
