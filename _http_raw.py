@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -160,7 +161,7 @@ async def handle_tunnel(
                        status_code, error_str, 0, 0,
                        int((time.monotonic() - t_start) * 1000))
             if pool:
-                pool.record(proxy_id, False, (time.monotonic() - t_start) * 1000)
+                pool.record(proxy_id, False, (time.monotonic() - t_start) * 1000, host=host)
             return
 
         writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -176,7 +177,7 @@ async def handle_tunnel(
         logger.info("connect_tunnel_closed", target=target, source_ip=source_ip,
                     bytes_out=bytes_c2u, bytes_in=bytes_u2c, latency_ms=latency_ms, route=route_applied)
         if pool:
-            pool.record(proxy_id, True, latency_ms, bytes_in=bytes_u2c, bytes_out=bytes_c2u)
+            pool.record(proxy_id, True, latency_ms, host=host, bytes_in=bytes_u2c, bytes_out=bytes_c2u)
         _maybe_log(db, target, host, source_ip, route_applied, 200, None,
                    bytes_out=bytes_c2u, bytes_in=bytes_u2c, latency_ms=latency_ms)
         return
@@ -218,7 +219,7 @@ async def handle_tunnel(
                            status_code, error_str, 0, 0,
                            int((time.monotonic() - t_start) * 1000))
                 if pool:
-                    pool.record(proxy_id, False, (time.monotonic() - t_start) * 1000)
+                    pool.record(proxy_id, False, (time.monotonic() - t_start) * 1000, host=host)
                 return
             # drain remaining CONNECT response headers
             while True:
@@ -239,7 +240,7 @@ async def handle_tunnel(
                    status_code, error_str, 0, 0,
                    int((time.monotonic() - t_start) * 1000))
         if pool:
-            pool.record(proxy_id, False, (time.monotonic() - t_start) * 1000)
+            pool.record(proxy_id, False, (time.monotonic() - t_start) * 1000, host=host)
         return
 
     # --- 2. Signal client that tunnel is open ---
@@ -325,6 +326,7 @@ async def handle_tunnel(
             proxy_id,
             success=(status_code == 200),
             latency_ms=latency_ms,
+            host=host,
             bytes_in=bytes_upstream_to_client,
             bytes_out=bytes_client_to_upstream,
         )
@@ -336,6 +338,14 @@ async def handle_tunnel(
         bytes_in=bytes_upstream_to_client,
         latency_ms=latency_ms,
     )
+
+
+def _is_ip_host(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
 
 
 def _maybe_log(
@@ -352,6 +362,10 @@ def _maybe_log(
 ) -> None:
     """Fire-and-forget DB log if db is available."""
     if db is None:
+        return
+    # Skip CONNECT tunnels to raw IP:port — these are proxy relay connections,
+    # not actual API calls. They flood the DB (800k+ records/week).
+    if _is_ip_host(host):
         return
     from db import source_host_from_ip, llm_provider_from_host
     row = {
@@ -470,6 +484,7 @@ async def handle_http(
             proxy_id,
             success=(status_code < 500),
             latency_ms=latency_ms,
+            host=host,
             bytes_in=resp_size,
             bytes_out=len(data),
         )

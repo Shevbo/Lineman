@@ -221,6 +221,7 @@ class ProxyServer:
         )
         self._breaker.set_session(self._upstream_session)
         self._dedup.set_session(self._upstream_session)
+        self._pool.set_session(self._upstream_session)
 
         # aiohttp app for HTTP-only (management API + HTTP forward proxy)
         app = web.Application()

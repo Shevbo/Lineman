@@ -368,9 +368,7 @@
         "hosts": [
           "10.66.0.0/24",
           "127.0.0.1",
-          "localhost",
-          "api.telegram.org",
-          "*.telegram.org"
+          "localhost"
         ],
         "proxies": []
       },
@@ -383,6 +381,13 @@
           "iproyal"
         ]
       }
-    ]
+    ],
+    "host_circuit_breaker": {
+      "enabled": true,
+      "window_secs": 300,
+      "error_threshold": 10,
+      "recovery_secs": 1800,
+      "alert_cooldown_secs": 300
+    }
   }
 }
