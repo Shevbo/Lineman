@@ -153,8 +153,8 @@
     "max_connections": 100,
     "request_timeout": 120,
     "llm_queue": {
-      "max_concurrent": 5,
-      "queue_timeout_s": 30,
+      "max_concurrent": 10,
+      "queue_timeout_s": 60,
       "hosts": [
         "api.deepseek.com",
         "generativelanguage.googleapis.com"
@@ -267,7 +267,7 @@
   "circuit_breaker": {
     "enabled": true,
     "window_secs": 60,
-    "max_calls": 30,
+    "max_calls": 100,
     "max_bytes_per_call": 8000000,
     "max_bytes_window": 40000000,
     "alert_cooldown_secs": 120
