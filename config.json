@@ -368,7 +368,9 @@
         "hosts": [
           "10.66.0.0/24",
           "127.0.0.1",
-          "localhost"
+          "localhost",
+          "api.telegram.org",
+          "*.telegram.org"
         ],
         "proxies": []
       },
