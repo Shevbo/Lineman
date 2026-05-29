@@ -181,7 +181,7 @@
     "latency_multiplier": 2.0,
     "proxy_url": "${LINEMAN_IPROYAL_URL}",
     "gemini_cf_proxy_url": "https://gemini-proxy-worker.bshevelev75.workers.dev",
-    "proxy6_url": "",
+    "proxy6_url": "${LINEMAN_PROXY6_URL}",
     "gateway_log_pattern": "/tmp/openclaw/openclaw-*.log",
     "google_drive_folder": "1_4Yk7kpSs8FTNxbP4w0V1o301Vqa6mRa",
     "report_time": "23:59",
@@ -360,6 +360,13 @@
         "url": "${LINEMAN_IPROYAL_URL}",
         "priority": 1,
         "enabled": true
+      },
+      {
+        "id": "proxy6",
+        "name": "Proxy6 (failover/secondary)",
+        "url": "${LINEMAN_PROXY6_URL}",
+        "priority": 2,
+        "enabled": true
       }
     ],
     "routes": [
@@ -373,12 +380,13 @@
         "proxies": []
       },
       {
-        "comment": "All traffic via iProyal — Telegram/Google blocked in RU, LLM APIs need geo-bypass",
+        "comment": "All traffic via iProyal primary, proxy6 secondary. Pool picks by error_rate→latency→priority; per-host circuit breaker auto-fails-over on tripped iProyal.",
         "hosts": [
           "*"
         ],
         "proxies": [
-          "iproyal"
+          "iproyal",
+          "proxy6"
         ]
       }
     ],

@@ -16,6 +16,32 @@
 
 ## Известные инциденты (из git log и памяти Бориса)
 
+### 2026-05-29 — PM2 vs systemd дублирование владельца Lineman
+
+**Симптом:** `systemctl --user restart lineman` валился `OSError: [Errno 98] address already in use`, но Lineman при этом обслуживал трафик. Менялся config.json, рестарт через systemd проходил с ошибкой, изменения не применялись.
+**Trigger:** Lineman управляется PM2 (`lineman-gateway` PID 488685, 30h uptime), а systemd-юнит `lineman.service` пытается стартовать тот же `main.py` — порт 9090 уже занят PM2-процессом.
+**Root cause:** В проде Lineman живёт под PM2 (ecosystem с `lineman-gateway`, `lineman-censor`, `lineman-guard`, плюс `keymaster-api`, `vibe-tunnel`, `gemini-live-service`, `inbox-watcher`, `federation-inbox-poll`). systemd-unit устарел, но не был отключён.
+**Fix:** В рамках сеанса 2026-05-29 остановил systemd-юнит (`systemctl --user stop lineman`) и сделал `npx pm2 restart lineman-gateway --update-env`. После этого Lineman v2 поднялся с новым `proxy_pool` (см. ниже).
+**Lesson:**
+- Документация (CLAUDE.md, [02_operations.md](02_operations.md)) ссылается на systemd-юнит — надо привести в соответствие с реальной PM2-инфраструктурой или решить вернуться на systemd.
+- Рестарт Lineman: `npx pm2 restart lineman-gateway --update-env` (или `pm2 reload`).
+- Перед стартом systemd-юнита надо `pm2 stop lineman-gateway`.
+- TODO: согласовать с Борисом, отключаем ли `systemctl --user disable lineman` или мигрируем обратно на systemd.
+
+### 2026-05-29 — Добавлен Proxy6 как secondary в proxy_pool
+
+**Контекст:** Борис попросил добавить второй прокси на случай провала iProyal. Credential `PROXY6_CRED` (формат `ip:port:user:pass`) в keymaster (`~/.keymaster/credentials/proxy6_cred`).
+**Изменения:**
+- В `~/keymaster/.lineman-proxy.env` добавлена `export LINEMAN_PROXY6_URL=http://user:pass@23.236.141.49:9219`.
+- `config.json`:
+  - `global.proxy6_url` теперь `${LINEMAN_PROXY6_URL}` (для legacy code path в `_http_raw.py` и `healer.py` который смотрит на TG-маршрут).
+  - `proxy_pool.proxies[]` дополнен записью `proxy6` (priority 2, enabled true).
+  - Catch-all route `*` теперь содержит `["iproyal", "proxy6"]`.
+- Бэкап: `config.json.bak-20260529-151125-pre-proxy6`.
+**Smoke:** `curl -x ${LINEMAN_PROXY6_URL} https://api.ipify.org` → `23.236.141.49`. TG корень → 302 (норма). Gemini корень → 404 (норма).
+**Поведение:** `ProxyPool.select` сортирует кандидатов по `(error_rate, avg_latency_ms, priority)`. Пока iproyal здоров — он работает. На per-host trip iproyal автоматом уходит на proxy6 для этого хоста. Если иproyal деградирует глобально (error_rate растёт) — proxy6 начинает обслуживать первым.
+**Lesson:** При добавлении прокси не забывать смотреть на `_http_raw.py` legacy path (для CONNECT без pool) и `healer.py` (telegram alert чейн).
+
 ### 2026-05-29 — iProyal 403 CONNECT с sdev (не Lineman, но рядом)
 
 **Симптом:** Claude CLI на sdev "потерял связь" — `403 CONNECT tunnel failed`.

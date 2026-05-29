@@ -42,11 +42,14 @@ proxy_pool          proxies + routes + host_circuit_breaker
 - `ttl_secs: 30`, `max_entries: 200`, `window_secs: 60`, `max_retries: 3`
 
 ### proxy_pool
-- proxies: только `iproyal` (`${LINEMAN_IPROYAL_URL}` из env). proxy1 был раньше, сейчас удалён из config.
+- proxies (2026-05-29):
+  - `iproyal` priority 1 — `${LINEMAN_IPROYAL_URL}` (egress 86.109.80.236)
+  - `proxy6` priority 2 — `${LINEMAN_PROXY6_URL}` (egress 23.236.141.49, secondary/failover)
 - routes:
   - `10.66.0.0/24` + `127.0.0.1` + `localhost` → **direct** (proxies: [])
-  - `*` → iproyal
+  - `*` → `[iproyal, proxy6]`. `ProxyPool.select` выбирает по `(error_rate, avg_latency_ms, priority)`, поэтому iproyal обслуживает пока он здоров; на per-host circuit trip iproyal автоматически уходит, остаётся proxy6.
 - host_circuit_breaker: `window=300s`, `error_threshold=10`, `recovery=1800s`
+- env: `LINEMAN_PROXY6_URL` берётся из `~/keymaster/.lineman-proxy.env` (значение восстанавливается из `~/.keymaster/credentials/proxy6_cred`, формат `ip:port:user:pass`).
 
 ### reverse_proxy.upstreams
 - `lm-studio: http://127.0.0.1:1234`
