@@ -1,0 +1,7 @@
+name = "gemini-proxy-worker"
+main = "src/index.js"
+compatibility_date = "2024-05-13"
+
+[[rules]]
+type = "ESModule"
+globs = ["**/*.js"]

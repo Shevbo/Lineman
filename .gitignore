@@ -1,0 +1,40 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# DB and state
+lineman.db
+lineman.db-shm
+lineman.db-wal
+metrics.json
+harvester_state.json
+state.json
+*.bak-*
+*.bak
+
+# Local config / secrets (should never be committed)
+.env
+.env.*
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Claude Code local-only
+.claude/settings.local.json
+
+# Logs
+*.log
+logs/
+
+# Cloudflare worker node_modules / wrangler state
+cloudflare-worker/node_modules/
+cloudflare-worker/*/node_modules/
+cloudflare-worker/*/.wrangler/
+cloudflare-worker/.wrangler/
