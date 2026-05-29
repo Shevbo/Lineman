@@ -68,6 +68,12 @@ def _count_message_tokens(content: Any) -> int:
     return 0
 
 
+from secret_mask import mask_secrets as _mask_sensitive_impl, mask_row
+
+def _mask_sensitive(text: str) -> str:
+    return _mask_sensitive_impl(text) or ""
+
+
 _SUMMARIZE_PROMPT = (
     "Summarize this conversation in 5 bullet points. "
     "Preserve: decisions made, tool results, unresolved questions, key facts. Be terse."
@@ -806,7 +812,8 @@ async def handle_reverse_proxy(
                 "target_url": upstream_url,
                 "target_host": provider,
             }
-            asyncio.create_task(db.log_request(row))
+            masked_row = mask_row(row)
+            asyncio.create_task(db.log_request(masked_row))
         except Exception:
             pass
 
@@ -824,7 +831,7 @@ async def handle_reverse_proxy(
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
                 "latency_ms": latency_ms,
-                "prompt_snippet": prompt_snippet,
+                "prompt_snippet": prompt_snippet if prompt_snippet else None,
                 "status": "ok" if status_code < 400 else "error",
             }))
         except Exception:

@@ -16,6 +16,32 @@
 
 ## Известные инциденты (из git log и памяти Бориса)
 
+### 2026-05-29 — GitGuardian leak: .openclaw/openclaw.json в истории shectory-infra
+
+**Симптом:** GitGuardian → email Борису: OpenClaw Auth Token + Telegram Bot Token в `Shevbo/shectory-infra` (push 15:01 UTC).
+**Trigger:** Файл `.openclaw/openclaw.json` был закоммичен в коммитах `dc8d8f4 → 01019e5 → 9c4ab42 → 68ed8a4`, удалён через `git rm` в `e9c5159`. Удаление не очистило историю.
+**Утекло (paths only):** 9 TG bot tokens (default/guilya/main-sdev/resume-editor/interview-coach/keymaster/titan/virtual-boris/nurse), 1 Google API key (повторён 8 раз), 1 OpenClaw gateway token. Полный inventory: `~/workspaces/infra/shectory-infra/SECURITY_INCIDENT_2026-05-29.md`.
+**Fix (мой):**
+- `.gitignore` уже содержит `openclaw.json` — новых утечек не будет.
+- В Lineman runtime: модуль [secret_mask.py](../../secret_mask.py), маскирование в [reverse_proxy.py:812](../../reverse_proxy.py) (request_body) и [proxy_server.py:490](../../proxy_server.py) (`/api/log` endpoint). 11 unit-тестов в `tests/test_secret_mask.py`.
+- Ретроактивно замаскировано 4457 строк в `request_log` (где было `api_key`/`sk-`/`Bearer`/`AIza`).
+- В `shectory-infra/scripts/`: `scrub_history.sh` (git-filter-repo + force-with-lease push, ждёт ротации) и `install_secret_guard.sh` (pre-commit + pre-push гарды). Уже установлено в `.git/hooks/`.
+**Что должен сделать Борис вручную:** ротация 9 TG bot tokens через BotFather, regenerate Google API key, новый OpenClaw gateway token, обновить keymaster и openclaw config. Только потом — команда мне «зачищай историю».
+**Lesson:**
+- Никогда не коммитить openclaw.json / .lineman-proxy.env / auth-profiles.json даже временно для синка.
+- `git rm` не очищает историю — нужен `git filter-repo`.
+- Daily audit ([scripts/lineman_daily_audit.py](../../scripts/lineman_daily_audit.py)) уже ловит leak-count > 0.
+
+### 2026-05-29 — ollama-hoster полностью не работал (config + no models)
+
+**Симптом:** За 14 дней 143/144 запроса к ollama-hoster — ошибки 403/400/502. KPI «ollama для простых» не выполняется.
+**Root cause (два независимых бага):**
+1. `reverse_proxy.upstreams.ollama-hoster = "http://10.66.0.7:11434/v1"` — двойной /v1 при склейке с rest_path `/v1/...` давало `/v1/v1/...` → 404.
+2. На hoster (10.66.0.7) Ollama жив, но `models: []` — ни одна модель не подгружена.
+**Fix:** В [config.json](../../config.json) `reverse_proxy.upstreams.ollama-hoster` → `http://10.66.0.7:11434` (без /v1). После рестарта `/proxy/ollama-hoster/v1/models` отвечает 200.
+**Что нужно от Бориса:** на hoster `ssh ... 'ollama pull llama3.2:3b && ollama pull nomic-embed-text'` или указать другие модели — добавить в [router.py](../../router.py) FALLBACK_CHAINS.BATCH соответствующее имя.
+**Lesson:** При прописывании upstream URL в Lineman config — не дублировать prefix который агенты сами шлют. Health-probe не ловил это, потому что probe.health_endpoint = `/api/tags` (а не `/v1/...`).
+
 ### 2026-05-29 — PM2 vs systemd дублирование владельца Lineman
 
 **Симптом:** `systemctl --user restart lineman` валился `OSError: [Errno 98] address already in use`, но Lineman при этом обслуживал трафик. Менялся config.json, рестарт через systemd проходил с ошибкой, изменения не применялись.

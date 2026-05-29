@@ -1,24 +1,29 @@
 # Операции Lineman — runbook
 
-## Запуск / перезапуск
+## Запуск / перезапуск (PM2, не systemd)
+
+С 2026-05-29 Lineman живёт в PM2 как процесс `lineman-gateway` вместе с компаньонами `lineman-censor`, `lineman-guard`, `keymaster-api`, `inbox-watcher`, `vibe-tunnel`, `gemini-live-service`, `federation-inbox-poll`. Systemd-юнит `lineman.service` отключён (`systemctl --user disable lineman`), бэкап файла остался в репо для отката.
 
 ```bash
 # Статус
-systemctl --user status lineman
-systemctl --user is-active lineman
+npx pm2 list
+npx pm2 describe lineman-gateway
 
 # Старт / стоп / рестарт
-systemctl --user start lineman
-systemctl --user stop lineman
-systemctl --user restart lineman
+npx pm2 start lineman-gateway
+npx pm2 stop lineman-gateway
+npx pm2 restart lineman-gateway --update-env    # подхватить новый ~/keymaster/.lineman-proxy.env
+npx pm2 reload lineman-gateway                  # graceful (если возможно)
 
 # Логи
-journalctl --user -u lineman -f               # follow
-journalctl --user -u lineman -n 100 --no-pager
-journalctl --user -u lineman --since "10 minutes ago"
+npx pm2 logs lineman-gateway --lines 200 --nostream
+tail -f ~/.pm2/logs/lineman-gateway-out.log
+tail -f ~/.pm2/logs/lineman-gateway-error.log
 ```
 
-**Если systemctl --user не работает** — проверь что `loginctl enable-linger shectory` выполнен и что service-файл лежит в `~/.config/systemd/user/lineman.service` (симлинк на `~/workspaces/infra/lineman/lineman.service` или копия).
+**Если PM2 не доступен** (`npx pm2 not found`) — проверь `which npx` (должно быть `/usr/bin/npx`), либо запусти PM2-daemon снова через `npx pm2 resurrect`.
+
+**Аварийный возврат на systemd** (на случай если PM2 умер): `systemctl --user enable lineman && systemctl --user start lineman` поднимет копию из `~/.config/systemd/user/lineman.service`. Перед этим `npx pm2 delete lineman-gateway`, чтобы не было EADDRINUSE.
 
 ## Health-check
 
@@ -93,7 +98,8 @@ sudo systemctl reload nginx      # перезагрузка
 
 ## Cron-таски, завязанные на Lineman
 
-- `lineman_retention.py` — daily (system или user crontab)
+- `lineman_retention.py` — daily в 03:00 (user crontab) — NULL request_body > 7d, delete rows > 90d, vacuum
+- `scripts/lineman_daily_audit.py` — daily в 09:23 (user crontab) — KPI-сводка в `docs/DAILY_YYYY-MM-DD.md`, TG-алерт при P0
 - `lineman-hourly-check` — qaper job (см. `~/.claude/projects/-home-shectory/memory/project_qaper_cron.md`)
 
 ## Куда смотреть когда что-то идёт не так

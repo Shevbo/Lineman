@@ -275,7 +275,7 @@
   "reverse_proxy": {
     "upstreams": {
       "lm-studio": "http://127.0.0.1:1234",
-      "ollama-hoster": "http://10.66.0.7:11434/v1",
+      "ollama-hoster": "http://10.66.0.7:11434",
       "deepseek": "https://api.deepseek.com",
       "google": "https://generativelanguage.googleapis.com"
     }

@@ -486,6 +486,8 @@ class ProxyServer:
                     row["source_ip"] = source_ip
                     from db import source_host_from_ip
                     row.setdefault("source_host", source_host_from_ip(source_ip))
+                from secret_mask import mask_row
+                mask_row(row)
                 loop = asyncio.get_event_loop()
                 loop.create_task(self._db.log_request(row))
             except (json.JSONDecodeError, Exception) as exc:
