@@ -797,7 +797,7 @@ async def handle_reverse_proxy(
                 "source_agent": agent_name,
                 "llm_provider": provider,
                 "llm_model": req_model,
-                "request_body": req_body.decode("utf-8", errors="replace")[:4096] if req_body else None,
+                "request_body": _mask_sensitive(req_body.decode("utf-8", errors="replace"))[:4096] if req_body else None,
                 "request_size": len(req_body) if req_body else 0,
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,

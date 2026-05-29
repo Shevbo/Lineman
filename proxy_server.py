@@ -341,6 +341,16 @@ class ProxyServer:
                 await self._raw_api_tg_send(rd, wr)
                 return
 
+            # klod-access two-way inbox (specialised: file-backed, no openclaw cli)
+            elif request_path_only.startswith("/api/agent/klod-access/"):
+                await self._raw_api_klod_access(rd, wr, request_path, method)
+                return
+
+            # Censor's daily top-offenders report
+            elif request_path_only == "/api/censor/top-offenders":
+                await self._raw_api_censor_top_offenders(rd, wr)
+                return
+
             # Agent-to-agent messaging API
             # /api/agent/{target_agent_id}/message?from=<from_agent_id>&message=<msg>
             elif request_path_only.startswith("/api/agent/"):
@@ -718,6 +728,138 @@ class ProxyServer:
         self._send_json_response(wr, status_code, response_data)
         await wr.drain()
         wr.close()
+
+    async def _raw_api_klod_access(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        request_path: str,
+        method: str,
+    ) -> None:
+        """File-backed inbox+outbox for the klod-access agent.
+
+        Routes:
+          POST /api/agent/klod-access/message?from=&node= body=text  → inbox
+          GET  /api/agent/klod-access/inbox?since=&limit=            → JSONL
+          POST /api/agent/klod-access/reply?to=&in_reply_to=  body=text → outbox+forward
+          GET  /api/agent/klod-access/outbox?since=&limit=           → JSONL
+        """
+        from urllib.parse import urlparse, parse_qs
+        import klod_inbox
+
+        # Read headers + optional body (content-length only)
+        headers: dict[str, str] = {}
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+            decoded = hdr.decode("utf-8", errors="replace").strip()
+            if ": " in decoded:
+                k, v = decoded.split(": ", 1)
+                headers[k.lower()] = v
+
+        content_length = int(headers.get("content-length", "0") or "0")
+        body_bytes = b""
+        if content_length > 0:
+            body_bytes = await asyncio.wait_for(
+                rd.read(min(content_length, 65536)), timeout=10
+            )
+
+        url = urlparse(request_path)
+        suffix = url.path[len("/api/agent/klod-access/"):].rstrip("/")
+        qs = parse_qs(url.query)
+
+        def q(key: str, default: str = "") -> str:
+            vals = qs.get(key)
+            return vals[0] if vals else default
+
+        try:
+            if method == "POST" and suffix == "message":
+                from_agent = q("from")
+                if not from_agent:
+                    return self._send_simple_and_close(wr, 400, {"error": "missing 'from'"})
+                # Body may be text/plain or JSON {"message": "..."}
+                msg = body_bytes.decode("utf-8", errors="replace").strip()
+                if msg.startswith("{"):
+                    try:
+                        msg = json.loads(body_bytes).get("message", msg)
+                    except Exception:
+                        pass
+                if not msg:
+                    msg = q("message", "")
+                if not msg:
+                    return self._send_simple_and_close(wr, 400, {"error": "empty message"})
+                rec = klod_inbox.write_inbox(from_agent, msg, node=q("node"))
+                logger.info("klod_inbox_msg", id=rec["id"], from_=from_agent)
+                return self._send_simple_and_close(wr, 200, {"status": "ok", "id": rec["id"]})
+
+            if method == "GET" and suffix == "inbox":
+                since = int(q("since", "0") or "0")
+                limit = min(int(q("limit", "50") or "50"), 500)
+                msgs = klod_inbox.read_inbox(since, limit)
+                return self._send_simple_and_close(wr, 200, {"messages": msgs})
+
+            if method == "POST" and suffix == "reply":
+                to_agent = q("to")
+                if not to_agent:
+                    return self._send_simple_and_close(wr, 400, {"error": "missing 'to'"})
+                in_reply_to = int(q("in_reply_to", "0") or "0") or None
+                msg = body_bytes.decode("utf-8", errors="replace").strip()
+                if msg.startswith("{"):
+                    try:
+                        msg = json.loads(body_bytes).get("message", msg)
+                    except Exception:
+                        pass
+                if not msg:
+                    return self._send_simple_and_close(wr, 400, {"error": "empty message"})
+                ok, err = await klod_inbox.deliver_reply(to_agent, msg, self._upstream_session)
+                rec = klod_inbox.write_outbox(to_agent, msg, in_reply_to, ok, err)
+                return self._send_simple_and_close(wr, 200, {"status": "ok", "id": rec["id"], "delivered": ok, "error": err})
+
+            if method == "GET" and suffix == "outbox":
+                since = int(q("since", "0") or "0")
+                limit = min(int(q("limit", "50") or "50"), 500)
+                msgs = klod_inbox.read_outbox(since, limit)
+                return self._send_simple_and_close(wr, 200, {"messages": msgs})
+
+            self._send_simple_and_close(wr, 404, {"error": "unknown klod-access route"})
+        except Exception as e:
+            logger.exception("klod_access_handler_error")
+            self._send_simple_and_close(wr, 500, {"error": str(e)})
+
+    async def _raw_api_censor_top_offenders(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+    ) -> None:
+        """GET /api/censor/top-offenders — latest Censor top-offenders report."""
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+        try:
+            import glob
+            import os as _os
+            pattern = _os.path.expanduser("~/workspaces/infra/censor/reports/top-offenders-*.json")
+            files = sorted(glob.glob(pattern))
+            if not files:
+                self._send_simple_and_close(wr, 404, {"error": "no top-offenders report yet"})
+                return
+            payload = json.loads(open(files[-1]).read())
+            self._send_simple_and_close(wr, 200, payload)
+        except Exception as e:
+            self._send_simple_and_close(wr, 500, {"error": str(e)})
+
+    def _send_simple_and_close(self, wr: asyncio.StreamWriter, status: int, payload: dict) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 500: "Internal Server Error"}.get(status, "OK")
+        wr.write(
+            f"HTTP/1.1 {status} {reason}\r\n"
+            f"Content-Type: application/json; charset=utf-8\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            f"Connection: close\r\n\r\n".encode()
+        )
+        wr.write(body)
 
     async def _raw_api_tg_send(
         self,
