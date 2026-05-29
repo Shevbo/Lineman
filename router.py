@@ -23,6 +23,7 @@ class RouteContext(Enum):
     BACKGROUND = "background"
     LONG_CONTEXT = "longContext"
     WEB_SEARCH = "webSearch"
+    BATCH = "batch"
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,11 @@ FALLBACK_CHAINS: dict[RouteContext, list[Route]] = {
     ],
     RouteContext.WEB_SEARCH: [
         Route("gemini", "gemini-2.5-flash"),
+        Route("deepseek", "deepseek-v4-flash"),
+    ],
+    RouteContext.BATCH: [
+        Route("ollama-hoster", "llama3.2:3b"),
+        Route("lm-studio", "gemma-4-e4b"),
         Route("deepseek", "deepseek-v4-flash"),
     ],
 }
@@ -144,7 +150,10 @@ class Router:
                 body_text = ""
 
         body_lower = body_text.lower()
-        if any(kw in body_lower for kw in ("background", "фонов", "in background", "async task")):
+        batch_keywords = {"batch", "cron", "scheduled", "background task", "периодическ", "cron job"}
+        if any(kw in body_lower for kw in batch_keywords):
+            ctx = RouteContext.BATCH
+        elif any(kw in body_lower for kw in ("background", "фонов", "in background", "async task")):
             ctx = RouteContext.BACKGROUND
         elif ("thinking" in body_lower or "reasoning" in body_lower
                 or '"thinking"' in body_lower or "'thinking'" in body_lower):

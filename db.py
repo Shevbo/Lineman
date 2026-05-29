@@ -66,9 +66,6 @@ LLM_PROVIDER_MAP: dict[str, str] = {
     "api.deepseek.com":                                   "deepseek",
     "generativelanguage.googleapis.com":                  "gemini",
     "gemini-proxy-worker.bshevelev75.workers.dev":        "gemini",
-    "api.openai.com":                                     "openai",
-    "api.anthropic.com":                                  "anthropic",
-    "api.cohere.com":                                     "cohere",
 }
 
 

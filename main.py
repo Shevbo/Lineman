@@ -29,6 +29,7 @@ from checks import (
     check_google_calendar,
     check_google_drive,
     check_google_gmail,
+    check_openai_compat,
     check_telegram,
 )
 from db import RequestLogDB
@@ -84,6 +85,8 @@ def resolve_api_key(env_var: str, config_path: str) -> str:
     val = os.environ.get(env_var, "")
     if val:
         return val
+    if not config_path:
+        return ""
     try:
         result = subprocess.run(
             ["openclaw", "config", "get", config_path],
@@ -121,6 +124,7 @@ CHECK_DISPATCH = {
     "google_gmail": check_google_gmail,
     "google_calendar": check_google_calendar,
     "telegram": check_telegram,
+    "openai": check_openai_compat,
 }
 
 
@@ -186,7 +190,7 @@ async def run_check(
                 svc.get("openclaw_config_path", ""),
             )
 
-        if not api_key and svc_type not in ("google_drive", "google_gmail", "google_calendar"):
+        if not api_key and svc_type not in ("google_drive", "google_gmail", "google_calendar", "openai"):
             logger.warning("no_api_key", service=svc_id)
             return {"online": False, "error": "no API key configured"}
 
@@ -195,6 +199,9 @@ async def run_check(
             kwargs["model"] = svc["model"]
         if svc_type == "gemini" and svc.get("base_url"):
             kwargs["base_url"] = svc["base_url"]
+        if svc_type == "openai":
+            kwargs["base_url"] = svc.get("base_url", "")
+            kwargs["health_endpoint"] = svc.get("health_endpoint", "/v1/models")
 
         result = await _call_with_retry(check_fn, client, kwargs)
 
