@@ -22,6 +22,16 @@ POOL_URL = "http://127.0.0.1:9090/api/pool/stats"
 METRICS_URL = "http://127.0.0.1:9090/metrics"
 TG_ALERT_URL = "http://127.0.0.1:9090/api/agent/main/message"
 
+# Gemini anti-dormant keep-alive
+GEMINI_PROBE_URL = "http://127.0.0.1:9090/proxy/google/v1beta/models"
+GEMINI_KEY_ENV = "GEMINI_API_KEY"
+
+# Expected egress IPs — if they drift, GCP IP-allowlist breaks silently
+EXPECTED_EGRESS = {
+    "iproyal": "86.109.80.236",
+    "proxy6": "23.236.141.49",
+}
+
 # KPI thresholds — нарушение каждого пишется в action items
 KPI_PROVIDER_ERR_PCT = 5.0
 KPI_GEOBLOCK_403_PER_DAY = 5
@@ -53,6 +63,47 @@ def _alert(text: str) -> None:
         pass
 
 
+def _gemini_keepalive() -> tuple[bool, int]:
+    """Daily call to /v1beta/models prevents dormant-blocking of unrestricted keys.
+    Returns (ok, model_count). Keymaster file is authoritative (post-rotation);
+    env GEMINI_API_KEY is only a fallback for ad-hoc runs."""
+    key = ""
+    try:
+        key = open(os.path.expanduser("~/.keymaster/credentials/gemini_api_key")).read().strip()
+    except Exception:
+        key = os.environ.get(GEMINI_KEY_ENV, "")
+    if not key:
+        return False, 0
+    try:
+        url = f"{GEMINI_PROBE_URL}?key={key}"
+        with urllib.request.urlopen(url, timeout=8) as r:
+            data = json.loads(r.read())
+            return True, len(data.get("models", []))
+    except Exception:
+        return False, 0
+
+
+def _check_egress_drift() -> list[str]:
+    """Verify forward-proxy egress matches expected per-proxy IPs. Returns drift list."""
+    drifts = []
+    # We can't directly hit each pool member from cron; use the live forward path:
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9090/health", timeout=3) as r:
+            json.loads(r.read())
+    except Exception:
+        return ["lineman not reachable"]
+    # Just probe current forward egress once — this tells which proxy is active *now*.
+    try:
+        proxies = {"https": "http://127.0.0.1:9090", "http": "http://127.0.0.1:9090"}
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
+        ip = opener.open("https://api.ipify.org", timeout=8).read().decode().strip()
+        if ip not in EXPECTED_EGRESS.values():
+            drifts.append(f"unexpected egress IP {ip} (expected one of {list(EXPECTED_EGRESS.values())}) — обнови IP allowlist в GCP")
+    except Exception as e:
+        drifts.append(f"egress probe failed: {e}")
+    return drifts
+
+
 def main() -> int:
     today = datetime.date.today().isoformat()
     out_path = os.path.join(DOCS, f"DAILY_{today}.md")
@@ -61,6 +112,8 @@ def main() -> int:
     health = _fetch(HEALTH_URL) or {}
     pool = _fetch(POOL_URL) or {}
     metrics = _fetch(METRICS_URL) or {}
+    gem_ok, gem_models = _gemini_keepalive()
+    egress_drifts = _check_egress_drift()
 
     con = sqlite3.connect(DB)
     cur = con.cursor()
@@ -122,7 +175,14 @@ def main() -> int:
         actions.append(f"P0: {leak_count} строк request_log содержат api_key/sk-/Bearer. Маскирование в reverse_proxy.py всё ещё не внедрено.")
         p0 = True
     if geoblock_403 > KPI_GEOBLOCK_403_PER_DAY:
-        actions.append(f"P1: {geoblock_403} × 403 на LLM-провайдерах за сутки — геоблок/ключ. Проверить gemini-proxy-worker fallback.")
+        actions.append(f"P0: {geoblock_403} × 403 на LLM-провайдерах за сутки — возможна блокировка Gemini key. Проверь GCP Console → Credentials → IP allowlist / API restriction. См. .claude/memory/07_gemini_key_policy.md.")
+        if geoblock_403 >= 3:
+            p0 = True
+    if not gem_ok:
+        actions.append("P0: Gemini keep-alive FAILED — ключ может быть в dormant-block или quota исчерпана.")
+        p0 = True
+    for drift in egress_drifts:
+        actions.append(f"P1: egress drift: {drift}")
     if huge_ctx:
         top_agent, top_model, top_tokens, _cnt = huge_ctx[0]
         actions.append(f"P1: tokens_in > {KPI_HUGE_CTX_TOKENS} y агента {top_agent} ({top_model}, max {top_tokens}). Подключить auto-summarise.")
@@ -149,6 +209,8 @@ def main() -> int:
         "## Здоровье",
         f"- /health: {health.get('status','?')}, uptime {health.get('uptime_s',0)}s, requests {health.get('requests_served',0)}, errors {health.get('errors',0)}",
         f"- DB: {db_size/1024/1024:.1f}MB, WAL: {wal_size/1024/1024:.1f}MB",
+        f"- Gemini keep-alive: {'ok' if gem_ok else 'FAIL'} ({gem_models} models visible)",
+        f"- Egress drifts: {egress_drifts if egress_drifts else 'none'}",
         "",
         "## Pool за 24h",
     ]
