@@ -10,6 +10,8 @@
 - [04_incidents.md](04_incidents.md) — журнал инцидентов (YYYY-MM-DD: симптом → root cause → fix)
 - [05_config_reference.md](05_config_reference.md) — справка по `config.json`
 - [06_testing.md](06_testing.md) — какие тесты, как запускать, что покрыто
+- [07_gemini_key_policy.md](07_gemini_key_policy.md) — Gemini key policy, anti-dormant, IP allowlist
+- [08_mission.md](08_mission.md) — миссия Lineman, что я делаю постоянно, контракт с агентами
 
 ## Правила записи
 

@@ -1,22 +1,30 @@
-"""Двусторонний канал messaging для агента klod-access.
+"""Двусторонний канал messaging для агента klod-access + автотриаж жалоб.
 
 Inbox — это append-only JSONL (`~/klod-access/inbox.jsonl`). Каждая строка:
-    {"id": N, "ts": "ISO", "from": "agent_id", "node": "smain", "message": "..."}
+    {"id": N, "ts": "ISO", "from": "agent_id", "node": "smain", "message": "...",
+     "meta": {"kind": "complaint", "triage": {...}}}
 
 Outbox — replies от klod-access обратно отправителю, формат тот же файл
 `outbox.jsonl`, плюс попытка прямой доставки через `/api/agent/{to}/message`.
 
-Endpoints:
-- POST /api/agent/klod-access/message?from=X[&node=Y]   body=text  → inbox.jsonl
-- GET  /api/agent/klod-access/inbox?since=N&limit=K     → JSONL response
+Авто-триаж: если в сообщении распознан паттерн жалобы (по словам ниже),
+write_inbox автоматически собирает последние 5 ошибочных запросов агента
+из request_log и кладёт их в meta.triage. Это помогает Klod-Access
+сразу видеть контекст проблемы без отдельного запроса в БД.
+
+Endpoints (см. proxy_server._raw_api_klod_access):
+- POST /api/agent/klod-access/message?from=X[&node=Y]   body=text  → inbox
+- GET  /api/agent/klod-access/inbox?since=N&limit=K     → JSONL
 - POST /api/agent/klod-access/reply?to=X[&in_reply_to=N] body=text → outbox + forward
-- GET  /api/agent/klod-access/outbox?since=N            → JSONL response
+- GET  /api/agent/klod-access/outbox?since=N            → JSONL
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import re
+import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +39,66 @@ INBOX_DIR = Path.home() / "klod-access"
 INBOX_FILE = INBOX_DIR / "inbox.jsonl"
 OUTBOX_FILE = INBOX_DIR / "outbox.jsonl"
 COUNTER_FILE = INBOX_DIR / "counter.txt"
+
+DB_PATH = Path(__file__).resolve().parent / "lineman.db"
+
+_COMPLAINT_RE = re.compile(
+    r"(?i)\b(401|403|429|5\d\d|timeout|timed out|ошибка|упал|не работает|"
+    r"недоступн|blocked|заблокирован|quota|rate\s?limit|"
+    r"can\'?t|cannot|fail|error|exception|broken|crash|жалоб)\b"
+)
+
+
+def _is_complaint(message: str) -> bool:
+    return bool(message and _COMPLAINT_RE.search(message))
+
+
+def _triage_from_db(agent: str, window_minutes: int = 60) -> dict[str, Any] | None:
+    """Собрать последние 5 ошибочных запросов агента — root-cause hints для Klod-Access."""
+    if not DB_PATH.exists() or not agent:
+        return None
+    try:
+        con = sqlite3.connect(str(DB_PATH))
+        cur = con.cursor()
+        rows = cur.execute(
+            """SELECT timestamp, llm_provider, target_host, status_code,
+                      substr(COALESCE(error,''),1,160), route_applied,
+                      tokens_in, latency_ms
+               FROM request_log
+               WHERE source_agent = ?
+                 AND timestamp > datetime('now', ?)
+                 AND (status_code >= 400 OR error IS NOT NULL)
+               ORDER BY id DESC LIMIT 5""",
+            (agent, f"-{int(window_minutes)} minutes"),
+        ).fetchall()
+        total = cur.execute(
+            "SELECT COUNT(*) FROM request_log WHERE source_agent = ? "
+            "AND timestamp > datetime('now', ?)",
+            (agent, f"-{int(window_minutes)} minutes"),
+        ).fetchone()[0]
+        errs = cur.execute(
+            "SELECT COUNT(*) FROM request_log WHERE source_agent = ? "
+            "AND timestamp > datetime('now', ?) AND status_code >= 400",
+            (agent, f"-{int(window_minutes)} minutes"),
+        ).fetchone()[0]
+        con.close()
+        recent_errors = [
+            {
+                "ts": r[0], "provider": r[1], "host": r[2], "status": r[3],
+                "error": r[4], "route": r[5], "tokens_in": r[6], "latency_ms": r[7],
+            }
+            for r in rows
+        ]
+        return {
+            "window_min": window_minutes,
+            "agent_requests_total": total,
+            "agent_requests_errored": errs,
+            "agent_error_rate_pct": round(100.0 * errs / total, 1) if total else 0.0,
+            "recent_errors": recent_errors,
+        }
+    except Exception as e:
+        logger.exception("triage_failed")
+        return {"error": str(e)}
 
 
 def _ensure_dir() -> None:
@@ -83,6 +151,13 @@ def write_inbox(from_agent: str, message: str, node: str | None = None,
         "node": node or "smain",
         "message": message,
     }
+    meta = dict(meta) if meta else {}
+    # Auto-triage: жалобы → подтянуть контекст из request_log
+    if _is_complaint(message) and meta.get("kind") not in {"huge_context"}:
+        meta.setdefault("kind", "complaint")
+        triage = _triage_from_db(from_agent)
+        if triage:
+            meta["triage"] = triage
     if meta:
         rec["meta"] = meta
     _append_line(INBOX_FILE, rec)
