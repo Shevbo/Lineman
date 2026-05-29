@@ -277,7 +277,8 @@
       "lm-studio": "http://127.0.0.1:1234",
       "ollama-hoster": "http://10.66.0.7:11434",
       "deepseek": "https://api.deepseek.com",
-      "google": "https://generativelanguage.googleapis.com"
+      "google": "https://generativelanguage.googleapis.com",
+      "anthropic": "https://api.anthropic.com"
     }
   },
   "agents": {
@@ -377,6 +378,13 @@
           "10.66.0.0/24",
           "127.0.0.1",
           "localhost"
+        ],
+        "proxies": []
+      },
+      {
+        "comment": "smain's own public IP — направление наружу к самому себе через iProyal бессмысленно. Был источник 821K реквестов через iProyal за 14 дней (см. REPORT_2026-05-29.md).",
+        "hosts": [
+          "83.69.248.77"
         ],
         "proxies": []
       },

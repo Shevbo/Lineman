@@ -1,10 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
-    "additionalDirectories": [
-      "/home/shectory/workspaces/infra/lineman",
-      "/home/shectory/.claude/projects/-home-shectory/memory"
-    ],
     "allow": [
       "Read(/home/shectory/FEDERATION.md)",
       "Read(/home/shectory/AGENTS.md)",
@@ -88,7 +84,9 @@
       "Write(.claude/memory/**)",
       "Write(.claude/agents/**)",
       "Write(tests/**)",
-      "Write(docs/**)"
+      "Write(docs/**)",
+      "Bash(mkdir -p /home/shectory/.claude/projects/-home-shectory-workspaces-infra-lineman/memory *)",
+      "WebFetch(domain:ai.google.dev)"
     ],
     "deny": [
       "Bash(rm -rf:*)",
@@ -119,8 +117,26 @@
       "Write(lineman.db*)",
       "Write(/home/shectory/.openclaw/**)",
       "Write(/home/shectory/keymaster/**)"
+    ],
+    "additionalDirectories": [
+      "/home/shectory/workspaces/infra/lineman",
+      "/home/shectory/.claude/projects/-home-shectory/memory",
+      "/home/shectory/.claude/projects/-home-shectory-workspaces-infra-lineman"
     ]
   },
   "model": "claude-opus-4-7",
-  "outputStyle": "default"
+  "outputStyle": "default",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/shectory/workspaces/infra/lineman/scripts/klod_session_start.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
 }

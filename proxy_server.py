@@ -1510,7 +1510,7 @@ class ProxyServer:
             if hdr in (b"\r\n", b"\n", b""):
                 break
 
-        html_path = Path("/home/shectory/workspaces/projects/shectory-dashboard") / "index.html"
+        html_path = Path(__file__).resolve().parent / "dashboard" / "index.html"
         if not html_path.exists():
             body = b"<h1>Dashboard not found. Create dashboard/index.html</h1>"
             ct = "text/html"

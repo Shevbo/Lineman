@@ -821,6 +821,7 @@ async def handle_reverse_proxy(
     if signals is not None:
         try:
             from db import source_host_from_ip
+            from secret_mask import mask_secrets
             asyncio.create_task(signals.async_enqueue({
                 "ts": time.time(),
                 "from_agent": agent_name,
@@ -831,11 +832,37 @@ async def handle_reverse_proxy(
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
                 "latency_ms": latency_ms,
-                "prompt_snippet": prompt_snippet if prompt_snippet else None,
+                "prompt_snippet": mask_secrets(prompt_snippet) if prompt_snippet else None,
                 "status": "ok" if status_code < 400 else "error",
             }))
         except Exception:
             pass
+
+    # Active Censor: huge context alert to klod-access inbox
+    if (tokens_in or 0) > 200_000:
+        try:
+            from klod_inbox import write_inbox
+            from db import source_host_from_ip
+            write_inbox(
+                from_agent=agent_name or "(unknown)",
+                node=source_host_from_ip(source_ip) or "smain",
+                message=(
+                    f"⚠ huge context: tokens_in={tokens_in} model={req_model} "
+                    f"provider={provider} status={status_code}. "
+                    f"Compression was {'applied' if compression_applied else 'NOT applied'}. "
+                    f"Consider pre-summarisation in this agent's pipeline."
+                ),
+                meta={
+                    "kind": "huge_context",
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                    "model": req_model,
+                    "provider": provider,
+                    "compression_applied": bool(compression_applied),
+                },
+            )
+        except Exception:
+            logger.exception("censor_huge_context_alert_failed")
 
     logger.info(
         "rproxy_done",
