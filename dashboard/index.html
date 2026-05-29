@@ -132,34 +132,54 @@ body {
 
 /* ── RIGHT PANEL: PACKET LOG ── */
 #right-panel {
-  width: 310px; flex-shrink: 0;
+  width: 360px; flex-shrink: 0;
   border-left: 1px solid #1a2030;
   display: flex; flex-direction: column; min-height: 0;
 }
 #pkt-header {
-  display:flex; align-items:center; gap:6px;
-  padding:6px 10px; background:#0d1117; border-bottom:1px solid #1a2030;
-  flex-shrink:0;
+  display:flex; align-items:center; gap:5px;
+  padding:5px 8px; background:#0d1117; border-bottom:1px solid #1a2030;
+  flex-shrink:0; flex-wrap:wrap;
 }
-#pkt-title { font-size:10px; font-weight:700; color:#58a6ff; letter-spacing:.06em; flex:1; }
-#pkt-count { font-size:9px; color:#484f58; }
+#pkt-title { font-size:10px; font-weight:700; color:#58a6ff; letter-spacing:.06em; }
+#pkt-count { font-size:9px; color:#484f58; margin-right:auto; }
 #btn-pause {
   background:#21262d; border:1px solid #30363d; border-radius:4px;
-  color:#8b949e; font-size:10px; padding:2px 8px; cursor:pointer; flex-shrink:0;
+  color:#8b949e; font-size:10px; padding:2px 7px; cursor:pointer; flex-shrink:0;
 }
 #btn-pause.paused { background:#2a1f00; border-color:#6a4f00; color:#e3b341; }
 #btn-pause:hover { color:#e6edf3; }
 #btn-copy {
   background:#21262d; border:1px solid #30363d; border-radius:4px;
-  color:#8b949e; font-size:10px; padding:2px 7px; cursor:pointer; flex-shrink:0;
+  color:#8b949e; font-size:10px; padding:2px 6px; cursor:pointer; flex-shrink:0;
 }
 #btn-copy:hover { color:#e6edf3; }
+#btn-dl {
+  background:#21262d; border:1px solid #30363d; border-radius:4px;
+  color:#8b949e; font-size:10px; padding:2px 6px; cursor:pointer; flex-shrink:0;
+}
+#btn-dl:hover { color:#3fb950; border-color:#3fb950; }
+
+#pkt-filters {
+  display:flex; align-items:center; gap:4px; padding:4px 8px;
+  background:#0d1117; border-bottom:1px solid #1a2030; flex-shrink:0; flex-wrap:wrap;
+}
+#pkt-filters select, #pkt-filters input {
+  background:#161b22; border:1px solid #30363d; color:#8b949e;
+  font-size:9px; padding:2px 5px; border-radius:3px; min-width:0;
+}
+#pkt-filters select { max-width:90px; }
+#pkt-filters input  { max-width:80px; }
+#pkt-filters select:focus, #pkt-filters input:focus { outline:none; border-color:#58a6ff; color:#e6edf3; }
+.pkt-filter-lbl { font-size:8px; color:#484f58; letter-spacing:.05em; }
+#btn-filter-reset { background:none; border:none; color:#484f58; font-size:9px; cursor:pointer; padding:0 3px; }
+#btn-filter-reset:hover { color:#e6edf3; }
 
 #pkt-cols {
   display:grid;
-  grid-template-columns: 60px 1fr 1fr 60px;
+  grid-template-columns: 48px 52px 78px 1fr 62px;
   gap:0; padding:3px 6px;
-  background:#0d1117; border-bottom:1px solid #1a2030;
+  background:#0a0d12; border-bottom:1px solid #1a2030;
   flex-shrink:0;
 }
 .pkt-col-hd {
@@ -177,22 +197,84 @@ body {
 
 .pkt-row {
   display:grid;
-  grid-template-columns: 60px 1fr 1fr 60px;
+  grid-template-columns: 48px 52px 78px 1fr 62px;
   gap:0; padding:2px 6px;
   border-bottom:1px solid #0f1117;
   cursor:default;
 }
 .pkt-row:hover { background:#161b22; }
-.pkt-from { color:#c9d1d9; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 2px; }
-.pkt-to   { color:#8b949e;  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 2px; }
-.pkt-ts   { color:#484f58;  white-space:nowrap; padding:0 2px; }
-.pkt-type { padding:0 2px; }
+.pkt-ts    { color:#484f58; white-space:nowrap; padding:0 2px; font-size:9px; }
+.pkt-type  { padding:0 2px; }
+.pkt-model { color:#e3b341; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 2px; font-size:9px; }
+.pkt-route { color:#8b949e; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 2px; }
+.pkt-tkns  { color:#484f58; white-space:nowrap; padding:0 2px; font-size:9px; text-align:right; }
+.pkt-tkn-in  { color:#58a6ff; }
+.pkt-tkn-out { color:#3fb950; }
 .pkt-snippet {
   grid-column: 1 / -1;
-  font-size:9px; color:#484f58; font-style:italic;
+  font-size:9px; color:#6e7681;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  padding:0 4px 3px; border-top:1px solid #0f1117;
+  padding:1px 4px 3px; border-top:1px solid #0f1117;
 }
+
+/* ── BUCKET ROWS ── */
+.bucket-row {
+  display:flex; align-items:center; gap:6px;
+  padding:3px 6px; border-bottom:1px solid #1a2030;
+  cursor:pointer; background:#0a0d12; user-select:none;
+  font-size:10px;
+}
+.bucket-row:hover { background:#161b22; }
+.bucket-row.expanded { background:#0d1520; border-bottom-color:#1a3050; }
+.bucket-chevron { color:#484f58; font-size:9px; width:10px; flex-shrink:0; }
+.bucket-ts    { color:#58a6ff; font-size:9px; white-space:nowrap; flex-shrink:0; }
+.bucket-cnt   { color:#e6edf3; font-weight:700; font-size:9px; white-space:nowrap; flex-shrink:0; }
+.bucket-route { color:#8b949e; font-size:9px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bucket-tkns  { color:#484f58; font-size:9px; white-space:nowrap; flex-shrink:0; }
+.bucket-err   { color:#f85149; font-size:9px; flex-shrink:0; }
+.bucket-children { background:#070a0f; border-bottom:2px solid #1a3050; }
+.bucket-children .pkt-row { padding-left:20px; }
+
+/* ── SAVINGS STRIP ── */
+#savings-strip {
+  display:flex; align-items:center; gap:8px; padding:4px 14px;
+  background:#0a1208; border-bottom:1px solid #1a2030; flex-shrink:0; font-size:10px;
+}
+#savings-strip.hidden { display:none; }
+.sv-label { color:#484f58; font-size:9px; letter-spacing:.06em; text-transform:uppercase; }
+.sv-val  { color:#3fb950; font-weight:700; }
+.sv-pct  { color:#e3b341; font-weight:700; }
+.sv-sep  { color:#30363d; }
+#sv-period { background:#0d1117; border:1px solid #1a2030; color:#8b949e; font-size:9px; padding:1px 5px; border-radius:3px; cursor:pointer; }
+#sv-period:focus { outline:none; border-color:#3fb950; }
+
+/* ── PACKET DETAIL MODAL ── */
+#poverlay #pbox {
+  width: 720px; max-height: 85vh; display: flex; flex-direction: column;
+  padding: 0; overflow: hidden;
+}
+#pbox-header {
+  padding: 14px 18px 10px; border-bottom: 1px solid #30363d; flex-shrink: 0;
+  display: flex; align-items: center; gap: 10px;
+}
+#pbox-header h2 { font-size: 13px; flex: 1; margin: 0; }
+#pbox-meta {
+  display: flex; gap: 16px; padding: 8px 18px; background: #0d1117;
+  border-bottom: 1px solid #21262d; flex-shrink: 0; flex-wrap: wrap;
+}
+.pm-item { font-size: 10px; }
+.pm-label { color: #484f58; margin-right: 4px; }
+.pm-val   { color: #e6edf3; }
+.pm-val.blue   { color: #58a6ff; }
+.pm-val.green  { color: #3fb950; }
+.pm-val.yellow { color: #e3b341; }
+#pbox-body {
+  flex: 1; overflow-y: auto; padding: 12px 18px;
+  font-size: 11px; line-height: 1.6; font-family: 'Cascadia Code', 'Fira Code', monospace;
+  white-space: pre-wrap; word-break: break-word; color: #c9d1d9; background: #0d1117;
+}
+#pbox-body::-webkit-scrollbar { width: 6px; }
+#pbox-body::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
 
 /* ── SHARED MODALS ── */
 .modal-overlay {
@@ -259,6 +341,7 @@ body {
   <div class="badge">tkn today <b id="s-tkn">—</b></div>
   <div class="badge">calls <b id="s-calls">—</b></div>
   <div class="badge">req <b id="s-req">—</b></div>
+  <div class="badge" style="border-color:#1a4027;background:#0e2318"><b id="s-saved" style="color:#3fb950">$—</b> сэкон. (<b id="s-savedpct" style="color:#e3b341">—</b>%)</div>
   <div id="pulse"></div>
   <span id="node-status">—</span>
   <div id="legend">
@@ -272,6 +355,28 @@ body {
   </div>
   <span id="ts-upd">—</span>
   <button id="btn-report" onclick="openReport()">📊 Отчёт</button>
+</div>
+
+<!-- savings strip -->
+<div id="savings-strip" class="hidden">
+  <span class="sv-label">RTK экономия</span>
+  <span class="sv-val" id="sv-saved">$—</span>
+  <span class="sv-sep">·</span>
+  <span class="sv-pct" id="sv-pct">—%</span>
+  <span class="sv-sep">·</span>
+  <span class="sv-label">факт</span>
+  <span style="color:#58a6ff" id="sv-actual">$—</span>
+  <span class="sv-sep">·</span>
+  <span class="sv-label">если Sonnet</span>
+  <span style="color:#f85149" id="sv-claude">$—</span>
+  <span class="sv-sep" style="flex:1"></span>
+  <span class="sv-label">период</span>
+  <select id="sv-period" onchange="loadSavings()">
+    <option value="today">сегодня</option>
+    <option value="week">7 дней</option>
+    <option value="month">месяц</option>
+    <option value="">всё время</option>
+  </select>
 </div>
 
 <div id="main-row">
@@ -333,14 +438,27 @@ body {
     <div id="pkt-header">
       <span id="pkt-title">📡 PACKET LOG</span>
       <span id="pkt-count">0</span>
-      <button id="btn-pause" onclick="togglePause()">⏸ Пауза</button>
-      <button id="btn-copy"  onclick="copyLog()">📋</button>
+      <button id="btn-pause" onclick="togglePause()">⏸</button>
+      <button id="btn-copy"  onclick="copyLog()" title="Копировать в буфер">📋</button>
+      <button id="btn-dl"    onclick="downloadLog()" title="Скачать как файл">⬇</button>
+    </div>
+    <div id="pkt-filters">
+      <span class="pkt-filter-lbl">МОДЕЛЬ</span>
+      <select id="f-model" onchange="applyFilters()">
+        <option value="">все</option>
+      </select>
+      <span class="pkt-filter-lbl">ОТ</span>
+      <input  id="f-from" type="text" placeholder="агент" oninput="applyFilters()">
+      <span class="pkt-filter-lbl">КОМУ</span>
+      <input  id="f-to"   type="text" placeholder="сервис" oninput="applyFilters()">
+      <button id="btn-filter-reset" onclick="resetFilters()">✕</button>
     </div>
     <div id="pkt-cols">
-      <span class="pkt-col-hd">От</span>
-      <span class="pkt-col-hd">Кому</span>
-      <span class="pkt-col-hd">Дата / Время</span>
+      <span class="pkt-col-hd">Время</span>
       <span class="pkt-col-hd">Тип</span>
+      <span class="pkt-col-hd">Модель</span>
+      <span class="pkt-col-hd">От → Кому</span>
+      <span class="pkt-col-hd">↑in ↓out</span>
     </div>
     <div id="pkt-body"></div>
   </div>
@@ -351,6 +469,18 @@ body {
 <div id="logstrip">
   <span id="log-title">SIGNALS</span>
   <div id="log-inner"><span style="color:#484f58;font-size:10px">waiting for signals…</span></div>
+</div>
+
+<!-- Packet detail modal -->
+<div id="poverlay" class="modal-overlay">
+  <div id="pbox" class="modal-box">
+    <div id="pbox-header">
+      <h2 id="p-title">Пакет</h2>
+      <button class="modal-close" onclick="closePacket()">✕</button>
+    </div>
+    <div id="pbox-meta"></div>
+    <div id="pbox-body"></div>
+  </div>
 </div>
 
 <!-- Agent modal -->
@@ -370,7 +500,7 @@ body {
   <div id="rbox" class="modal-box">
     <button class="modal-close" onclick="closeReport()">✕</button>
     <h2>📊 Отчёт по экономии токенов</h2>
-    <div class="rsub">Сравнение с Claude Sonnet ($3/$15 per 1M tkn)</div>
+    <div class="rsub">Сравнение с Claude Sonnet 4-6 ($3.00/$15.00 per 1M tkn) — цены обновлены 2026-05-17</div>
     <div id="r-period" style="display:flex;gap:8px;align-items:center;margin:8px 0;font-size:10px;color:#8b949e;">
       <span>Период:</span>
       <input type="date" id="r-since" style="background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:2px 6px;border-radius:4px;font-size:10px">
@@ -389,7 +519,7 @@ body {
       </tr></thead>
       <tbody id="r-tbody"></tbody>
     </table>
-    <div id="r-footer">Базовая линия: Claude Sonnet 4 · $3.00/1M input · $15.00/1M output</div>
+    <div id="r-footer">Базовая линия: Claude Sonnet 4-6 · $3.00/1M input · $15.00/1M output · цены обновлены 2026-05-17</div>
   </div>
 </div>
 
@@ -435,12 +565,16 @@ const SIG = {
 let nodeData = null;
 let agentPos = {};
 let svcStatus = {};
-let lastTs = 0;
+// start from 2 minutes ago to avoid replaying all history on page load
+let lastTs = Math.floor(Date.now() / 1000) - 120;
 let logs = [];
 const MAX_LOG = 40;
 let pktLog = [];
 const MAX_PKT_LOG = 9999;
 let pktPaused = false;
+let pktFiltered = [];  // filtered view
+let knownModels = new Set();
+let expandedBuckets = new Set();  // set of bucket keys currently expanded
 let anim = 0;
 const MAX_ANIM = 24;
 let modalKey = null;
@@ -670,64 +804,253 @@ function appendPktLog(sig) {
     fromLabel = nodeId;
   }
   toLabel = sig.to_service || '?';
-  if (sig.to_agent) toLabel = sig.to_agent + ' (agent)';
+  if (sig.to_agent) toLabel = sig.to_agent;
 
-  const tkn = sig.tokens_in  ? '+'+fmtN(sig.tokens_in)
-            : sig.tokens_out ? '+'+fmtN(sig.tokens_out) : '';
-  const lat = sig.latency_ms ? ' '+sig.latency_ms+'ms' : '';
-  const extra = (tkn||lat) ? ` <span style="color:#484f58">${tkn}${lat}</span>` : '';
+  const model   = sig.model || '';
+  const modelShort = model
+    .replace('deepseek-', 'ds-').replace('gemini-', 'gm-')
+    .replace('-preview', '').replace('-20251001', '');
 
-  const st     = SIG[type] || { c:'#58a6ff', sym:'●' };
-  const tsStr  = fmtDateTime(sig.ts);
+  const tin  = sig.tokens_in  || 0;
+  const tout = sig.tokens_out || 0;
+  const latMs = sig.latency_ms || 0;
+
+  const st    = SIG[type] || { c:'#58a6ff', sym:'●' };
+  const tsStr = fmtTimeShort(sig.ts);
+
   const snippet = sig.prompt_snippet
-    ? `<div class="pkt-snippet" title="${sig.prompt_snippet.replace(/"/g,'&quot;').replace(/</g,'&lt;')}">${sig.prompt_snippet.slice(0,80).replace(/</g,'&lt;')}${sig.prompt_snippet.length>80?'…':''}</div>`
-    : '';
+    ? sig.prompt_snippet.slice(0, 120).replace(/</g, '&lt;')
+    : (latMs ? `${latMs}ms` : '');
 
-  pktLog.push({ fromLabel, toLabel, tsStr, type, color: st.c, sym: st.sym, extra, snippet });
+  const entry = {
+    fromLabel, toLabel, tsStr, type, model, modelShort,
+    color: st.c, tin, tout, latMs, snippet,
+    _raw: sig,
+  };
+
+  if (model) {
+    if (!knownModels.has(model)) {
+      knownModels.add(model);
+      _rebuildModelFilter();
+    }
+  }
+
+  pktLog.push(entry);
   if (pktLog.length > MAX_PKT_LOG) pktLog.shift();
 
   $id('pkt-count').textContent = pktLog.length;
 
-  if (!pktPaused) renderPktLog();
+  if (!pktPaused) {
+    applyFilters();
+  }
+}
+
+function _rebuildModelFilter() {
+  const sel = $id('f-model');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">все</option>';
+  for (const m of [...knownModels].sort()) {
+    const short = m.replace('deepseek-','ds-').replace('gemini-','gm-').replace('-preview','').replace('-20251001','');
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = short;
+    if (m === cur) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+function applyFilters() {
+  const fModel = ($id('f-model')?.value || '').toLowerCase();
+  const fFrom  = ($id('f-from')?.value  || '').toLowerCase().trim();
+  const fTo    = ($id('f-to')?.value    || '').toLowerCase().trim();
+
+  pktFiltered = pktLog.filter(e => {
+    if (fModel && e.model.toLowerCase() !== fModel) return false;
+    if (fFrom  && !e.fromLabel.toLowerCase().includes(fFrom)) return false;
+    if (fTo    && !e.toLabel.toLowerCase().includes(fTo)) return false;
+    return true;
+  });
+
+  renderPktLog();
+}
+
+function resetFilters() {
+  const fi = $id('f-from'); if (fi) fi.value = '';
+  const ft = $id('f-to');   if (ft) ft.value = '';
+  const fm = $id('f-model'); if (fm) fm.value = '';
+  applyFilters();
+}
+
+function buildBuckets(entries) {
+  const map = new Map();
+  for (const e of entries) {
+    const bk = Math.floor((e._raw?.ts || 0) / 5) * 5;
+    if (!map.has(bk)) map.set(bk, { bk, entries: [], sumIn: 0, sumOut: 0, hasError: false, routes: new Set() });
+    const b = map.get(bk);
+    b.entries.push(e);
+    b.sumIn  += e.tin  || 0;
+    b.sumOut += e.tout || 0;
+    if ((e._raw?.status === 'error') || e.snippet?.startsWith('[CB BLOCKED]')) b.hasError = true;
+    const fromShort = e.fromLabel.replace(/@smain$/, '');
+    b.routes.add(`${fromShort}→${e.toLabel}`);
+  }
+  return [...map.values()].sort((a, b) => a.bk - b.bk);
+}
+
+function _renderPktEntry(e, globalIdx) {
+  const tinStr  = e.tin  ? `<span class="pkt-tkn-in">↑${fmtN(e.tin)}</span>` : '';
+  const toutStr = e.tout ? `<span class="pkt-tkn-out">↓${fmtN(e.tout)}</span>` : '';
+  const tkns = (tinStr || toutStr) ? `${tinStr}${tinStr&&toutStr?' ':''}${toutStr}` : (e.latMs ? `${e.latMs}ms` : '—');
+  const fromShort = e.fromLabel.replace(/@smain$/, '');
+  const route = `${fromShort}<span style="color:#30363d">→</span>${e.toLabel}`;
+  const snipRow = e.snippet
+    ? `<div class="pkt-snippet">${e.snippet}${e._raw?.prompt_snippet?.length>120?'…':''}</div>`
+    : '';
+  return `<div class="pkt-row" style="cursor:pointer" onclick="openPacketEntry(${globalIdx})" title="Детали пакета">
+    <span class="pkt-ts">${e.tsStr}</span>
+    <span class="pkt-type"><span class="lb lb-${e.type}" style="font-size:8px">${e.type.replace('agent_msg','a2a')}</span></span>
+    <span class="pkt-model" title="${e.model}">${e.modelShort||'—'}</span>
+    <span class="pkt-route" title="${e.fromLabel} → ${e.toLabel}">${route}</span>
+    <span class="pkt-tkns">${tkns}</span>
+    ${snipRow}
+  </div>`;
 }
 
 function renderPktLog() {
   const body = $id('pkt-body');
-  const visible = pktLog.slice(-200);
-  body.innerHTML = visible.map(e =>
-    `<div class="pkt-row">
-      <span class="pkt-from" title="${e.fromLabel}">${e.fromLabel}</span>
-      <span class="pkt-to"   title="${e.toLabel}">${e.toLabel}</span>
-      <span class="pkt-ts">${e.tsStr}</span>
-      <span class="pkt-type"><span class="lb lb-${e.type}" style="font-size:8px">${e.type}</span>${e.extra}</span>
-      ${e.snippet||''}
-    </div>`
-  ).join('');
+  const source = pktFiltered.length > 0 || _hasActiveFilter() ? pktFiltered : pktLog;
+  const visible = source.slice(-400);
+  const buckets = buildBuckets(visible);
+
+  // Build globalIdx map: index in visible array for each entry
+  const entryToGlobal = new Map();
+  visible.forEach((e, i) => entryToGlobal.set(e, i));
+
+  const html = buckets.map(b => {
+    const isExp = expandedBuckets.has(b.bk);
+    const chevron = isExp ? '▼' : '▶';
+    const cnt = b.entries.length;
+    const routeStr = [...b.routes].slice(0, 3).join(', ') + (b.routes.size > 3 ? `…+${b.routes.size-3}` : '');
+    const tinStr  = b.sumIn  ? `<span class="pkt-tkn-in">↑${fmtN(b.sumIn)}</span>`  : '';
+    const toutStr = b.sumOut ? `<span class="pkt-tkn-out">↓${fmtN(b.sumOut)}</span>` : '';
+    const tkns = tinStr || toutStr ? `${tinStr}${tinStr&&toutStr?' ':''}${toutStr}` : '—';
+    const err = b.hasError ? `<span class="bucket-err">⛔</span>` : '';
+    const ts = fmtTimeShort(b.bk);
+    const children = isExp
+      ? `<div class="bucket-children">${b.entries.map(e => _renderPktEntry(e, entryToGlobal.get(e))).join('')}</div>`
+      : '';
+    return `<div class="bucket-row${isExp?' expanded':''}" onclick="toggleBucket(${b.bk})">
+      <span class="bucket-chevron">${chevron}</span>
+      <span class="bucket-ts">${ts}</span>
+      <span class="bucket-cnt">${cnt}&nbsp;пак</span>
+      <span class="bucket-route" title="${[...b.routes].join(', ')}">${routeStr}</span>
+      <span class="bucket-tkns">${tkns}</span>
+      ${err}
+    </div>${children}`;
+  }).join('');
+
+  body.innerHTML = html;
   body.scrollTop = body.scrollHeight;
 }
+
+function toggleBucket(bk) {
+  if (expandedBuckets.has(bk)) expandedBuckets.delete(bk);
+  else expandedBuckets.add(bk);
+  renderPktLog();
+}
+
+function _hasActiveFilter() {
+  return !!($id('f-model')?.value || $id('f-from')?.value || $id('f-to')?.value);
+}
+
+// ═══════════════════════════════ PACKET DETAIL MODAL ═══
+let _pktIndex = null;
+
+function openPacketEntry(idx) {
+  // idx is global index into visible slice(-400) of current source
+  const source = pktFiltered.length > 0 || _hasActiveFilter() ? pktFiltered : pktLog;
+  const visible = source.slice(-400);
+  if (idx < 0 || idx >= visible.length) return;
+  const e = visible[idx];
+  _openPacketModal(e);
+}
+
+function openPacket(idx) {  // legacy: keep for any existing callers
+  openPacketEntry(idx);
+}
+
+function _openPacketModal(e) {
+  const sig = e._raw || {};
+  $id('poverlay').classList.add('open');
+
+  $id('p-title').textContent = `${e.type.toUpperCase()} · ${e.tsStr} · ${e.fromLabel} → ${e.toLabel}`;
+
+  const ts = sig.ts ? new Date(sig.ts*1000).toLocaleString('ru-RU') : '—';
+  $id('pbox-meta').innerHTML = `
+    <div class="pm-item"><span class="pm-label">Время</span><span class="pm-val">${ts}</span></div>
+    <div class="pm-item"><span class="pm-label">Тип</span><span class="pm-val"><span class="lb lb-${e.type}">${e.type}</span></span></div>
+    <div class="pm-item"><span class="pm-label">Модель</span><span class="pm-val yellow">${sig.model||'—'}</span></div>
+    <div class="pm-item"><span class="pm-label">От</span><span class="pm-val">${e.fromLabel}</span></div>
+    <div class="pm-item"><span class="pm-label">Кому</span><span class="pm-val">${e.toLabel}</span></div>
+    <div class="pm-item"><span class="pm-label">tokens_in</span><span class="pm-val blue">${sig.tokens_in ? fmtN(sig.tokens_in) : '—'}</span></div>
+    <div class="pm-item"><span class="pm-label">tokens_out</span><span class="pm-val green">${sig.tokens_out ? fmtN(sig.tokens_out) : '—'}</span></div>
+    <div class="pm-item"><span class="pm-label">Латентность</span><span class="pm-val">${sig.latency_ms ? sig.latency_ms+'ms' : '—'}</span></div>
+    <div class="pm-item"><span class="pm-label">Статус</span><span class="pm-val">${sig.status||'—'}</span></div>
+    <div class="pm-item"><span class="pm-label">node</span><span class="pm-val">${sig.from_node||'—'}</span></div>
+  `;
+
+  const snippet = sig.prompt_snippet;
+  if (snippet) {
+    $id('pbox-body').textContent = snippet;
+  } else {
+    $id('pbox-body').innerHTML = '<span style="color:#484f58;font-style:italic">Сниппет недоступен (HTTPS CONNECT туннель — тело не видно Lineman\'у)</span>';
+  }
+}
+
+function closePacket() {
+  $id('poverlay').classList.remove('open');
+  _pktIndex = null;
+}
+$id('poverlay').addEventListener('click', e => { if(e.target.id==='poverlay') closePacket(); });
 
 function togglePause() {
   pktPaused = !pktPaused;
   const btn = $id('btn-pause');
   if (pktPaused) {
-    btn.textContent = '▶ Продолж.';
+    btn.textContent = '▶';
+    btn.title = 'Продолжить';
     btn.classList.add('paused');
   } else {
-    btn.textContent = '⏸ Пауза';
+    btn.textContent = '⏸';
+    btn.title = 'Пауза';
     btn.classList.remove('paused');
-    renderPktLog();
+    applyFilters();
   }
 }
 
 function copyLog() {
-  const lines = pktLog.slice(-200).map(e =>
-    `От: ${e.fromLabel}\tКому: ${e.toLabel}\t${e.tsStr}\t${e.type}`
+  const source = _hasActiveFilter() ? pktFiltered : pktLog;
+  const lines = source.slice(-200).map(e =>
+    [e.tsStr, e.type, e.model, e.fromLabel, e.toLabel, e.tin||0, e.tout||0, e._raw?.prompt_snippet||''].join('\t')
   ).join('\n');
-  navigator.clipboard.writeText(lines).then(() => {
+  const header = 'время\tтип\tмодель\tот\tкому\ttokens_in\ttokens_out\tснипет\n';
+  navigator.clipboard.writeText(header + lines).then(() => {
     const btn = $id('btn-copy');
     btn.textContent = '✓';
     setTimeout(() => btn.textContent = '📋', 1200);
   });
+}
+
+function downloadLog() {
+  const source = _hasActiveFilter() ? pktFiltered : pktLog;
+  const lines = source.map(e => JSON.stringify(e._raw)).join('\n');
+  const blob = new Blob([lines], { type: 'application/x-ndjson' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `packets-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.jsonl`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ═══════════════════════════════ LEFT PANEL: ROUTING ═══
@@ -987,15 +1310,57 @@ function fmtDateTime(ts) {
   const hms = d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   return `${ymd} ${hms}`;
 }
+function fmtTimeShort(ts) {
+  if(!ts) return '—';
+  return new Date(ts*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+// ═══════════════════════════════ SAVINGS WIDGET ═══
+async function loadSavings() {
+  const period = $id('sv-period')?.value || 'today';
+  let url = '/api/report';
+  if (period === 'today') {
+    const now = new Date();
+    const ymd = now.toISOString().slice(0,10);
+    url += `?since=${ymd}T00:00:00&until=${ymd}T23:59:59`;
+  } else if (period === 'week') {
+    const since = new Date(Date.now() - 7*24*3600*1000).toISOString().slice(0,10);
+    url += `?since=${since}T00:00:00`;
+  } else if (period === 'month') {
+    const now = new Date();
+    url += `?since=${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01T00:00:00`;
+  }
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    const strip = $id('savings-strip');
+    if (strip) strip.classList.remove('hidden');
+    const saved = d.total_saved_usd || 0;
+    const pct   = d.total_saved_pct || 0;
+    const act   = d.total_actual_usd || 0;
+    const cla   = d.total_claude_usd || 0;
+    if ($id('sv-saved'))  $id('sv-saved').textContent  = '$' + fmtMoney(saved);
+    if ($id('sv-pct'))    $id('sv-pct').textContent    = pct + '%';
+    if ($id('sv-actual')) $id('sv-actual').textContent = '$' + fmtMoney(act);
+    if ($id('sv-claude')) $id('sv-claude').textContent = '$' + fmtMoney(cla);
+    // update header badge too
+    if ($id('s-saved'))    $id('s-saved').textContent    = '$' + fmtMoney(saved);
+    if ($id('s-savedpct')) $id('s-savedpct').textContent = pct;
+  } catch(e) {
+    // savings strip stays hidden if unavailable
+  }
+}
 
 // ═══════════════════════════════ INIT ═══
 fetchNodes();
 fetchRouting();
 fetchDecisions();
+loadSavings();
 setInterval(fetchSigs,      3000);
 setInterval(fetchNodes,    30000);
 setInterval(fetchRouting,  60000);
 setInterval(fetchDecisions, 5000);
+setInterval(loadSavings,   60000);
 </script>
 </body>
 </html>
