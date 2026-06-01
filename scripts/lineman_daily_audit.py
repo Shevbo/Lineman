@@ -21,6 +21,8 @@ HEALTH_URL = "http://127.0.0.1:9090/health"
 POOL_URL = "http://127.0.0.1:9090/api/pool/stats"
 METRICS_URL = "http://127.0.0.1:9090/metrics"
 TG_ALERT_URL = "http://127.0.0.1:9090/api/agent/main/message"
+KEYMASTER_MANIFEST_URL = "http://127.0.0.1:9093/keymaster/manifest"
+LINEMAN_SIGNALS_URL = "http://127.0.0.1:9090/api/signals"
 
 # Gemini anti-dormant keep-alive
 GEMINI_PROBE_URL = "http://127.0.0.1:9090/proxy/google/v1beta/models"
@@ -83,6 +85,43 @@ def _gemini_keepalive() -> tuple[bool, int]:
         return False, 0
 
 
+def _keymaster_audit() -> dict:
+    """Сводка по Ключнику: общее число секретов, sealed (без used_by),
+    давно не ротированных, key_rotated событий за сутки."""
+    out = {"total": 0, "no_used_by": [], "old_rotated": [], "key_rotated_24h": 0}
+    try:
+        with urllib.request.urlopen(KEYMASTER_MANIFEST_URL, timeout=4) as r:
+            m = json.loads(r.read())
+    except Exception as e:
+        out["error"] = str(e)
+        return out
+    secrets = m.get("secrets", {}) or {}
+    out["total"] = len(secrets)
+    for name, info in secrets.items():
+        if not info.get("used_by"):
+            out["no_used_by"].append(name)
+        last = info.get("last_rotated_at")
+        if last:
+            try:
+                import datetime as _dt
+                lt = _dt.datetime.fromisoformat(last.replace("Z", "+00:00"))
+                age_d = (_dt.datetime.now(_dt.timezone.utc) - lt).days
+                if age_d > 90:
+                    out["old_rotated"].append({"name": name, "age_days": age_d})
+            except Exception:
+                pass
+    # key_rotated за 24h
+    try:
+        import time as _t
+        since = _t.time() - 86400
+        with urllib.request.urlopen(f"{LINEMAN_SIGNALS_URL}?since={since}&limit=200", timeout=4) as r:
+            sigs = json.loads(r.read()).get("signals", [])
+        out["key_rotated_24h"] = sum(1 for s in sigs if s.get("type") == "key_rotated")
+    except Exception:
+        pass
+    return out
+
+
 def _check_egress_drift() -> list[str]:
     """Verify forward-proxy egress matches expected per-proxy IPs. Returns drift list."""
     drifts = []
@@ -114,6 +153,7 @@ def main() -> int:
     metrics = _fetch(METRICS_URL) or {}
     gem_ok, gem_models = _gemini_keepalive()
     egress_drifts = _check_egress_drift()
+    km = _keymaster_audit()
 
     con = sqlite3.connect(DB)
     cur = con.cursor()
@@ -201,6 +241,17 @@ def main() -> int:
     if tripped:
         actions.append(f"P1: tripped circuits: {tripped}")
 
+    # Keymaster signals
+    if km.get("error"):
+        actions.append(f"P1: Keymaster manifest недоступен: {km['error']}")
+    elif km.get("total", 0) == 0:
+        actions.append("P0: Keymaster manifest пустой — это аномалия.")
+        p0 = True
+    if km.get("no_used_by"):
+        actions.append(f"P2: {len(km['no_used_by'])} секретов без used_by — нет легальных потребителей или забыт _register_use. Примеры: {km['no_used_by'][:3]}")
+    if km.get("old_rotated"):
+        actions.append(f"P1: {len(km['old_rotated'])} секретов не ротировались > 90 дней. Топ: {km['old_rotated'][:3]}")
+
     lines = [
         f"# Lineman — суточная сводка {today}",
         "",
@@ -249,6 +300,14 @@ def main() -> int:
         lines += ["", "## Раздутые контексты (tokens_in > 200K) за 24h"]
         for agent, model, max_t, cnt in huge_ctx:
             lines.append(f"- {agent}/{model}: max={max_t}, count={cnt}")
+
+    lines += [
+        "", "## Keymaster",
+        f"- total секретов: {km.get('total', '?')}",
+        f"- key_rotated событий за 24h: {km.get('key_rotated_24h', 0)}",
+        f"- без used_by: {len(km.get('no_used_by') or [])}",
+        f"- не ротировались > 90 дней: {len(km.get('old_rotated') or [])}",
+    ]
 
     lines += ["", "## Action items", ""]
     if not actions:
