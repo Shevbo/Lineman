@@ -25,7 +25,12 @@
 - Развёрнуто на 4 нодах: sdev, hoster, pi, pi2. Cron `* * * * *` через `/opt/lineman_heartbeat.py`. На pi2 нет openclaw.json — шлёт только node-level heartbeat.
 - `proxy_server._raw_api_nodes` теперь выводит status из `signals_list` (heartbeat за 5 мин). Поле `last_heartbeat_age_s` в ответе.
 - `config.federation.decommissioned = ["cloud"]` — отметка вместо мёртвой пустой записи. _raw_api_nodes показывает `status=decommissioned`.
-**Open:** vibe (Windows 10.66.0.6) — нужен PowerShell scheduled task с эквивалентом heartbeat. Пока vibe остаётся `unknown`.
+**vibe (Windows 10.66.0.6) — закрыто 2026-06-01:**
+- На vibe есть `C:\Python314\python.exe` (3.14) и Node.js v24.13.1 (`C:\Program Files\nodejs\node.exe`).
+- `lineman_heartbeat.py` скопирован через `scp vibe:lineman_heartbeat.py` в `C:\Users\Boris\lineman_heartbeat.py`.
+- Зарегистрирован Windows scheduled task: `schtasks /Create /TN LinemanHeartbeat /TR "...python lineman_heartbeat.py" /SC MINUTE /MO 1 /F`.
+- Два мини-фикса в скрипте: (a) заменил Unicode `→` на ASCII `->` (Windows консоль cp1251, не utf-8); (b) `_NOPROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))` — обход system HTTP_PROXY который на Windows-машинах возвращает 407 для внутренних WG-адресов.
+- Smoke: `[21:31:25] node-level heartbeat -> 200`.
 **Lesson:** Когда что-то называется «federation», все узлы должны emit-ить сигнал жизни. Любой `"unknown"` в /api/nodes без heartbeat-source — баг архитектуры, а не данных.
 
 ### 2026-05-29 — GitGuardian leak: .openclaw/openclaw.json в истории shectory-infra

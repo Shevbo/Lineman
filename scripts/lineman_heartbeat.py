@@ -41,6 +41,11 @@ def _read_agents() -> list[dict]:
     return []
 
 
+# Bypass any system HTTP_PROXY (Windows boxes often have corp proxy that 407s
+# on internal WG addresses). Build a dedicated opener with empty ProxyHandler.
+_NOPROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _emit(payload: dict) -> tuple[bool, str]:
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
@@ -48,7 +53,7 @@ def _emit(payload: dict) -> tuple[bool, str]:
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=4) as r:
+        with _NOPROXY_OPENER.open(req, timeout=4) as r:
             return r.status < 400, str(r.status)
     except Exception as e:
         return False, type(e).__name__ + ":" + str(e)[:80]
@@ -66,7 +71,7 @@ def main() -> int:
             "status": "ok",
             "hostname": HOSTNAME,
         })
-        print(f"[{time.strftime('%H:%M:%S')}] node-level heartbeat → {info}")
+        print(f"[{time.strftime('%H:%M:%S')}] node-level heartbeat -> {info}")
         return 0 if ok else 1
 
     for ag in agents:
