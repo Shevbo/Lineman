@@ -352,7 +352,8 @@
       "cloud": [],
       "pi": [],
       "pi2": []
-    }
+    },
+    "decommissioned": ["cloud"]
   },
   "proxy_pool": {
     "proxies": [

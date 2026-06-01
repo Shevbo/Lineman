@@ -1288,6 +1288,18 @@ class ProxyServer:
         from db import WG_HOST_MAP
         WG_ORDER = ["pi2", "pi", "vibe", "smain", "cloud", "sdev", "hoster"]
         known = {name for name in WG_HOST_MAP.values()}
+        decommissioned = set(fed_cfg.get("decommissioned", []))
+
+        # Derive per-node status from recent heartbeat signals (5-minute window).
+        node_last_seen: dict[str, float] = {}
+        for s in signals_list:
+            node_id = s.get("from_node")
+            if node_id and s.get("type") == "heartbeat":
+                ts = float(s.get("ts") or 0)
+                if ts > node_last_seen.get(node_id, 0):
+                    node_last_seen[node_id] = ts
+        now = time.time()
+        HEARTBEAT_OK_WINDOW = 300.0
 
         other_nodes: list[dict[str, Any]] = []
         for name in WG_ORDER:
@@ -1304,11 +1316,17 @@ class ProxyServer:
                 }
                 for ag in node_agents_cfg.get(name, [])
             ]
+            if name in decommissioned:
+                status = "decommissioned"
+            else:
+                last = node_last_seen.get(name, 0)
+                status = "ok" if (now - last) < HEARTBEAT_OK_WINDOW and last > 0 else "unknown"
             other_nodes.append({
                 "id":     name,
                 "label":  name,
-                "status": "unknown",
+                "status": status,
                 "agents": nd_agents,
+                "last_heartbeat_age_s": round(now - node_last_seen.get(name, 0)) if node_last_seen.get(name) else None,
             })
 
         services = self._build_services_health()

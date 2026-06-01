@@ -16,6 +16,18 @@
 
 ## Известные инциденты (из git log и памяти Бориса)
 
+### 2026-06-01 — Federation node statuses всегда unknown, нет heartbeat
+
+**Симптом:** dashboard `/api/nodes` показывал pi/pi2/sdev/hoster/cloud все `status=unknown`. В топологии узлы пустые, агентов не видно. KPI «понимать кто кому» нарушен.
+**Root cause:** Никакого механизма heartbeat от non-local-нод не существовало. `proxy_server._raw_api_nodes` хардкодом ставил `"status": "unknown"` для всего что не smain. PM2 и cron на других узлах не запускали `signal_client.emit()`.
+**Fix:**
+- [scripts/lineman_heartbeat.py](../../scripts/lineman_heartbeat.py) — лёгкий скрипт, читает `~/.openclaw/openclaw.json:agents.list`, шлёт `POST /api/signal type=heartbeat` для каждого агента (или `_node` если openclaw нет).
+- Развёрнуто на 4 нодах: sdev, hoster, pi, pi2. Cron `* * * * *` через `/opt/lineman_heartbeat.py`. На pi2 нет openclaw.json — шлёт только node-level heartbeat.
+- `proxy_server._raw_api_nodes` теперь выводит status из `signals_list` (heartbeat за 5 мин). Поле `last_heartbeat_age_s` в ответе.
+- `config.federation.decommissioned = ["cloud"]` — отметка вместо мёртвой пустой записи. _raw_api_nodes показывает `status=decommissioned`.
+**Open:** vibe (Windows 10.66.0.6) — нужен PowerShell scheduled task с эквивалентом heartbeat. Пока vibe остаётся `unknown`.
+**Lesson:** Когда что-то называется «federation», все узлы должны emit-ить сигнал жизни. Любой `"unknown"` в /api/nodes без heartbeat-source — баг архитектуры, а не данных.
+
 ### 2026-05-29 — GitGuardian leak: .openclaw/openclaw.json в истории shectory-infra
 
 **Симптом:** GitGuardian → email Борису: OpenClaw Auth Token + Telegram Bot Token в `Shevbo/shectory-infra` (push 15:01 UTC).
