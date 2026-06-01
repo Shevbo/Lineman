@@ -752,12 +752,15 @@ function animPkt(sig) {
   const dot = el('circle',{ r:String(st.r), fill:st.c, filter:`url(#${st.f})`, opacity:'1' });
   pl.appendChild(dot);
 
+  if (segs.length === 0) { dot.remove(); anim--; return; }
   (function step(now) {
     const T  = Math.min((now-t0)/totalMs, 1);
     const sf = T * segs.length;
-    const si = Math.min(Math.floor(sf), segs.length-1);
+    const si = Math.max(0, Math.min(Math.floor(sf), segs.length-1));
+    const seg = segs[si];
+    if (!seg) { dot.remove(); anim--; return; }
     const t  = sf - si;
-    const {ax,ay,bx,by,cpx,cpy} = segs[si];
+    const {ax,ay,bx,by,cpx,cpy} = seg;
     const mt = 1-t;
     dot.setAttribute('cx', mt*mt*ax + 2*mt*t*cpx + t*t*bx);
     dot.setAttribute('cy', mt*mt*ay + 2*mt*t*cpy + t*t*by);
