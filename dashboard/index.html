@@ -102,6 +102,7 @@ body {
 .sd-down    { fill:#f85149; }
 .sd-degraded{ fill:#e3b341; }
 .sd-unknown { fill:#484f58; }
+.sd-decom   { fill:#6e7681; }
 
 /* ── LOG STRIP (bottom) ── */
 #logstrip {
@@ -418,7 +419,7 @@ body {
 
   <!-- CENTER: topology -->
   <div id="topo-wrap">
-    <svg id="topo" viewBox="0 0 1100 490" preserveAspectRatio="xMidYMid meet">
+    <svg id="topo" viewBox="0 0 1100 510" preserveAspectRatio="xMidYMid meet">
       <defs>
         <filter id="fg-blue"  x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
         <filter id="fg-green" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3"   result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
@@ -534,13 +535,16 @@ body {
 const HUB = { x:550, y:178 };
 const AGENT_R = 16;
 
+// 8 сервисов в линию: 6 cloud + 2 local LLM (lm-studio @ hyperv, ollama @ hoster)
 const SVCS = {
-  deepseek: { x:90,   y:50, label:'DeepSeek', emoji:'☁️' },
-  gemini:   { x:270,  y:50, label:'Gemini',   emoji:'☁️' },
-  telegram: { x:450,  y:50, label:'Telegram', emoji:'📱' },
-  openai:   { x:630,  y:50, label:'OpenAI',   emoji:'☁️' },
-  google:   { x:810,  y:50, label:'Google',   emoji:'📧' },
-  github:   { x:990,  y:50, label:'GitHub',   emoji:'🐙' },
+  deepseek:     { x:55,   y:50, label:'DeepSeek',  emoji:'☁️' },
+  gemini:       { x:195,  y:50, label:'Gemini',    emoji:'☁️' },
+  telegram:     { x:335,  y:50, label:'Telegram',  emoji:'📱' },
+  openai:       { x:475,  y:50, label:'OpenAI',    emoji:'☁️' },
+  google:       { x:615,  y:50, label:'Google',    emoji:'📧' },
+  github:       { x:755,  y:50, label:'GitHub',    emoji:'🐙' },
+  'ollama-hoster': { x:895, y:50, label:'Ollama·hoster', emoji:'🦙' },
+  'lm-studio':  { x:1035, y:50, label:'LM Studio·hyperv', emoji:'🧠' },
 };
 
 const WG_NODES = [
@@ -651,12 +655,18 @@ function renderTopology(data) {
   const ndMap = Object.fromEntries((data.nodes||[]).map(n=>[n.id,n]));
   for (const nd of WG_NODES) {
     const st = ndMap[nd.id]?.status || 'unknown';
-    const sc = st==='ok'||st==='online'?'sd-ok':st==='down'?'sd-down':st==='degraded'?'sd-degraded':'sd-unknown';
-    const g = el('g',{});
+    const isDecom = st === 'decommissioned';
+    const sc = isDecom ? 'sd-decom'
+             : st==='ok'||st==='online'?'sd-ok'
+             : st==='down'?'sd-down'
+             : st==='degraded'?'sd-degraded' : 'sd-unknown';
+    const g = el('g', isDecom ? {opacity:'0.35'} : {});
     g.appendChild(el('circle',{cx:nd.x,cy:nd.y,r:nd.r,'class':'node-circle'}));
     g.appendChild(el('circle',{cx:nd.x+nd.r-4,cy:nd.y-nd.r+4,r:4,'class':sc}));
     g.appendChild(el('text',{x:nd.x,y:nd.y+5,'font-size':nd.id==='smain'?'13':'11','class':'t-label'},nd.emoji));
-    g.appendChild(el('text',{x:nd.x,y:nd.y+nd.r+12,'class':'t-sub'},nd.id));
+    const sub = el('text',{x:nd.x,y:nd.y+nd.r+12,'class':'t-sub'}, nd.id + (isDecom?' (decom)':''));
+    if (isDecom) sub.setAttribute('text-decoration','line-through');
+    g.appendChild(sub);
     nl.appendChild(g);
   }
 
