@@ -52,10 +52,11 @@ proxy_pool          proxies + routes + host_circuit_breaker
 - env: `LINEMAN_PROXY6_URL` берётся из `~/keymaster/.lineman-proxy.env` (значение восстанавливается из `~/.keymaster/credentials/proxy6_cred`, формат `ip:port:user:pass`).
 
 ### reverse_proxy.upstreams
-- `lm-studio: http://127.0.0.1:1234`
-- `ollama-hoster: http://10.66.0.7:11434/v1`
+- `lm-studio: http://127.0.0.1:1234` — **это SSH-туннель** smain → shevbo-pi → 192.168.1.70:1234 (hyperv в LAN Бори). Команда туннеля: `ssh -L 1234:192.168.1.70:1234 shevbo-pi`. Модели: `google/gemma-4-e4b`, `gemma-4-26b-a4b-it-imatrix`, `deepseek-r1-distill-qwen-14b`, embeddings.
+- `ollama-hoster: http://10.66.0.7:11434` — Ollama на hoster (без /v1 префикса, см. инцидент 2026-05-29). Модель: `llama3.2:1b`. Используется censor_analyzer.
 - `deepseek: https://api.deepseek.com`
 - `google: https://generativelanguage.googleapis.com`
+- `anthropic: https://api.anthropic.com`
 
 **ВНИМАНИЕ:** `anthropic` НЕ зарегистрирован. `/proxy/anthropic/*` вернёт 400 "Unknown provider". Если кому-то понадобится reverse-proxy для Anthropic с метриками — добавлять upstream + маршрут в `proxy_pool.routes` (api.anthropic.com через что? через iProyal или через `cloudflare-worker/claude-connect-worker`?). До этого момента — claude CLI ходит через CONNECT (forward proxy путь A, без логирования).
 
