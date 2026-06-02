@@ -122,6 +122,43 @@ def _keymaster_audit() -> dict:
     return out
 
 
+def _lazy_queue_audit() -> dict:
+    """Lazy Queue: 24h throughput, hit-rate per backend, top kinds, p95 latency."""
+    out: dict = {"total": 0, "by_status": {}, "by_backend": {}, "by_kind": {}, "p95_ms": 0}
+    try:
+        con = sqlite3.connect(DB)
+        cur = con.cursor()
+        out["total"] = cur.execute(
+            "SELECT COUNT(*) FROM lazy_jobs WHERE ts_created > datetime('now','-1 day')"
+        ).fetchone()[0]
+        for row in cur.execute("""
+            SELECT status, COUNT(*) FROM lazy_jobs
+            WHERE ts_created > datetime('now','-1 day') GROUP BY status
+        """):
+            out["by_status"][row[0]] = row[1]
+        for row in cur.execute("""
+            SELECT backend_used, COUNT(*), SUM(COALESCE(tokens_in,0)+COALESCE(tokens_out,0))
+            FROM lazy_jobs WHERE status='done' AND ts_done > datetime('now','-1 day')
+            GROUP BY backend_used ORDER BY 2 DESC
+        """):
+            out["by_backend"][row[0] or "?"] = {"calls": row[1], "tokens": row[2] or 0}
+        for row in cur.execute("""
+            SELECT kind, COUNT(*) FROM lazy_jobs
+            WHERE ts_created > datetime('now','-1 day') GROUP BY kind ORDER BY 2 DESC LIMIT 5
+        """):
+            out["by_kind"][row[0]] = row[1]
+        lats = [r[0] for r in cur.execute(
+            "SELECT latency_ms FROM lazy_jobs WHERE status='done' AND latency_ms IS NOT NULL "
+            "AND ts_done > datetime('now','-1 day') ORDER BY latency_ms"
+        ).fetchall()]
+        if lats:
+            out["p95_ms"] = int(lats[max(0, int(len(lats) * 0.95) - 1)])
+        con.close()
+    except Exception as e:
+        out["error"] = str(e)
+    return out
+
+
 def _check_egress_drift() -> list[str]:
     """Verify forward-proxy egress matches expected per-proxy IPs. Returns drift list."""
     drifts = []
@@ -154,6 +191,7 @@ def main() -> int:
     gem_ok, gem_models = _gemini_keepalive()
     egress_drifts = _check_egress_drift()
     km = _keymaster_audit()
+    lq = _lazy_queue_audit()
 
     con = sqlite3.connect(DB)
     cur = con.cursor()
@@ -184,10 +222,12 @@ def main() -> int:
         FROM request_log
         WHERE timestamp>datetime('now','-1 days') AND tokens_in > {KPI_HUGE_CTX_TOKENS}
         GROUP BY source_agent, llm_model ORDER BY 3 DESC LIMIT 5""")
-    leak_count = _q(cur, """
+    leak_rows = _q(cur, """
         SELECT COUNT(*) FROM request_log
         WHERE timestamp>datetime('now','-1 days')
-        AND (request_body LIKE '%api_key%' OR request_body LIKE '%sk-%' OR request_body LIKE '%Bearer %')""")[0][0]
+          AND (request_body LIKE '%api_key%' OR request_body LIKE '%sk-%' OR request_body LIKE '%Bearer %')
+          AND (request_body IS NULL OR request_body NOT LIKE '%***REDACTED***%')""")
+    leak_count = leak_rows[0][0] if leak_rows and isinstance(leak_rows[0][0], int) else 0
     connect_flagged = _q(cur, """
         SELECT COUNT(*) FROM request_log
         WHERE route_applied='connect_tunnel_llm_flagged' AND timestamp>datetime('now','-1 days')""")[0][0]
@@ -308,6 +348,17 @@ def main() -> int:
         f"- без used_by: {len(km.get('no_used_by') or [])}",
         f"- не ротировались > 90 дней: {len(km.get('old_rotated') or [])}",
     ]
+
+    lines += [
+        "", "## Lazy Queue (24h)",
+        f"- jobs total: {lq.get('total', 0)}",
+        f"- by status: {lq.get('by_status') or {}}",
+        f"- by backend: {lq.get('by_backend') or {}}",
+        f"- top kinds: {lq.get('by_kind') or {}}",
+        f"- p95 latency: {lq.get('p95_ms', 0)}ms",
+    ]
+    if lq.get("by_status", {}).get("failed", 0) > 5:
+        actions.append(f"P1: lazy_queue {lq['by_status']['failed']} failed jobs за сутки — расследовать.")
 
     lines += ["", "## Action items", ""]
     if not actions:

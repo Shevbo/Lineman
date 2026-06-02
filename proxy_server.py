@@ -351,6 +351,11 @@ class ProxyServer:
                 await self._raw_api_censor_top_offenders(rd, wr)
                 return
 
+            # Lazy Queue (отложенные задачи для local LLM)
+            elif request_path_only.startswith("/api/queue/lazy"):
+                await self._raw_api_lazy_queue(rd, wr, request_path, method)
+                return
+
             # Agent-to-agent messaging API
             # /api/agent/{target_agent_id}/message?from=<from_agent_id>&message=<msg>
             elif request_path_only.startswith("/api/agent/"):
@@ -847,6 +852,97 @@ class ProxyServer:
                 return
             payload = json.loads(open(files[-1]).read())
             self._send_simple_and_close(wr, 200, payload)
+        except Exception as e:
+            self._send_simple_and_close(wr, 500, {"error": str(e)})
+
+    async def _raw_api_lazy_queue(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        request_path: str,
+        method: str,
+    ) -> None:
+        """Lazy Queue API:
+        POST /api/queue/lazy            body=JSON         → {job_id}
+        GET  /api/queue/lazy/<id>                         → {status, output, ...}
+        GET  /api/queue/lazy?from_agent=X&status=Y        → [{...}, ...]
+        DELETE /api/queue/lazy/<id>                       → {deleted: bool}
+        """
+        from urllib.parse import urlparse, parse_qs
+        import lazy_queue as lq
+
+        headers: dict[str, str] = {}
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+            decoded = hdr.decode("utf-8", errors="replace").strip()
+            if ": " in decoded:
+                k, v = decoded.split(": ", 1)
+                headers[k.lower()] = v
+
+        body = b""
+        content_length = int(headers.get("content-length", "0") or "0")
+        if content_length > 0:
+            body = await asyncio.wait_for(
+                rd.read(min(content_length, 256 * 1024)), timeout=10
+            )
+
+        parsed = urlparse(request_path)
+        path = parsed.path.rstrip("/")
+        qs = parse_qs(parsed.query)
+        suffix = path[len("/api/queue/lazy"):]  # "", "/<id>", или ""
+
+        try:
+            if method == "POST" and suffix in ("", "/"):
+                data = json.loads(body) if body else {}
+                job_id = lq.submit_job(
+                    from_agent=str(data.get("from_agent") or qs.get("from_agent", [""])[0] or "unknown"),
+                    from_node=str(data.get("from_node") or qs.get("from_node", [""])[0] or "smain"),
+                    kind=str(data.get("kind") or "tune"),
+                    user_prompt=str(data.get("prompt") or data.get("user_prompt") or ""),
+                    system_prompt=str(data.get("system") or data.get("system_prompt") or ""),
+                    max_tokens=int(data.get("max_tokens") or 600),
+                    temperature=float(data.get("temperature") or 0.3),
+                    priority=int(data.get("priority") or 3),
+                    deadline_hint_minutes=int(data.get("deadline_hint_minutes") or 60),
+                )
+                self._send_simple_and_close(wr, 200, {"job_id": job_id, "status": "queued"})
+                return
+
+            if method == "GET" and suffix.startswith("/"):
+                try:
+                    job_id = int(suffix.lstrip("/"))
+                except ValueError:
+                    self._send_simple_and_close(wr, 400, {"error": "bad job_id"})
+                    return
+                job = lq.get_job(job_id)
+                if not job:
+                    self._send_simple_and_close(wr, 404, {"error": "not found"})
+                    return
+                self._send_simple_and_close(wr, 200, job)
+                return
+
+            if method == "GET" and suffix in ("", "/"):
+                jobs = lq.list_jobs(
+                    from_agent=qs.get("from_agent", [None])[0],
+                    status=qs.get("status", [None])[0],
+                    limit=int(qs.get("limit", ["50"])[0]),
+                )
+                self._send_simple_and_close(wr, 200, {"jobs": jobs, "stats_24h": lq.stats_24h()})
+                return
+
+            if method == "DELETE" and suffix.startswith("/"):
+                try:
+                    job_id = int(suffix.lstrip("/"))
+                except ValueError:
+                    self._send_simple_and_close(wr, 400, {"error": "bad job_id"})
+                    return
+                ok = lq.delete_job(job_id)
+                self._send_simple_and_close(wr, 200, {"deleted": ok})
+                return
+
+            self._send_simple_and_close(wr, 400, {"error": f"unsupported {method} {request_path}"})
         except Exception as e:
             self._send_simple_and_close(wr, 500, {"error": str(e)})
 

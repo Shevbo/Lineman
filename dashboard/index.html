@@ -472,6 +472,12 @@ body {
   <span id="censor-inner" style="color:#484f58;font-size:10px">loading…</span>
 </div>
 
+<!-- Lazy Queue strip -->
+<div id="lazy-strip" style="flex-shrink:0;padding:4px 14px;background:#0d1117;border-top:1px solid #21262d;font-size:11px;color:#8b949e;display:flex;gap:14px;align-items:center;overflow-x:auto;white-space:nowrap">
+  <span style="color:#22c55e;font-weight:700">LAZY QUEUE:</span>
+  <span id="lazy-inner" style="color:#484f58;font-size:10px">loading…</span>
+</div>
+
 <!-- log strip -->
 <div id="logstrip">
   <span id="log-title">SIGNALS</span>
@@ -607,8 +613,14 @@ function renderTopology(data) {
   svcStatus = {};
   for (const s of data.services || []) svcStatus[s.id] = s.status;
 
+  // Какие узлы скрывать совсем (status=decommissioned из API)
+  const ndMap = Object.fromEntries((data.nodes||[]).map(n=>[n.id,n]));
+  const isVisible = (id) => (ndMap[id]?.status || 'unknown') !== 'decommissioned';
+  const visibleNodes = WG_NODES.filter(n => isVisible(n.id));
+
   agentPos = {};
   for (const nd of data.nodes || []) {
+    if (!isVisible(nd.id)) continue;
     const nPos = NODE_POS[nd.id];
     if (!nPos) continue;
     const agents = nd.agents || [];
@@ -625,8 +637,8 @@ function renderTopology(data) {
   // lines svc→hub
   for (const sp of Object.values(SVCS))
     cl.appendChild(el('line',{x1:sp.x,y1:sp.y+22,x2:HUB.x,y2:HUB.y-28,'class':'line-bg'}));
-  // lines hub→nodes
-  for (const nd of WG_NODES)
+  // lines hub→nodes (только видимые)
+  for (const nd of visibleNodes)
     cl.appendChild(el('line',{x1:HUB.x,y1:HUB.y+28,x2:nd.x,y2:nd.y-nd.r,'class':nd.id==='smain'?'line-main':'line-bg'}));
   // lines node→agents
   for (const [, ap] of Object.entries(agentPos)) {
@@ -651,22 +663,17 @@ function renderTopology(data) {
   nl.appendChild(el('text',{x:HUB.x,y:HUB.y+6,'font-size':'16','class':'t-label'},'🚦'));
   nl.appendChild(el('text',{x:HUB.x,y:HUB.y+44,'class':'t-hub'},'LINEMAN'));
 
-  // WG nodes
-  const ndMap = Object.fromEntries((data.nodes||[]).map(n=>[n.id,n]));
-  for (const nd of WG_NODES) {
+  // WG nodes — пропускаем decommissioned, их даже не рисуем
+  for (const nd of visibleNodes) {
     const st = ndMap[nd.id]?.status || 'unknown';
-    const isDecom = st === 'decommissioned';
-    const sc = isDecom ? 'sd-decom'
-             : st==='ok'||st==='online'?'sd-ok'
+    const sc = st==='ok'||st==='online'?'sd-ok'
              : st==='down'?'sd-down'
              : st==='degraded'?'sd-degraded' : 'sd-unknown';
-    const g = el('g', isDecom ? {opacity:'0.35'} : {});
+    const g = el('g',{});
     g.appendChild(el('circle',{cx:nd.x,cy:nd.y,r:nd.r,'class':'node-circle'}));
     g.appendChild(el('circle',{cx:nd.x+nd.r-4,cy:nd.y-nd.r+4,r:4,'class':sc}));
     g.appendChild(el('text',{x:nd.x,y:nd.y+5,'font-size':nd.id==='smain'?'13':'11','class':'t-label'},nd.emoji));
-    const sub = el('text',{x:nd.x,y:nd.y+nd.r+12,'class':'t-sub'}, nd.id + (isDecom?' (decom)':''));
-    if (isDecom) sub.setAttribute('text-decoration','line-through');
-    g.appendChild(sub);
+    g.appendChild(el('text',{x:nd.x,y:nd.y+nd.r+12,'class':'t-sub'},nd.id));
     nl.appendChild(g);
   }
 
@@ -1295,6 +1302,27 @@ async function fetchCensorTop() {
   } catch(e) { console.error('censorTop', e); }
 }
 
+async function fetchLazyQueue() {
+  try {
+    const r = await fetch('/api/queue/lazy?limit=5');
+    if (!r.ok) { $id('lazy-inner').textContent = '— offline —'; return; }
+    const d  = await r.json();
+    const s  = d.stats_24h || {};
+    const recent = (d.jobs||[]).slice(0,4).map(j => {
+      const c = j.status==='done'?'#3fb950':j.status==='running'?'#58a6ff':j.status==='failed'?'#f85149':'#8b949e';
+      const lat = j.latency_ms ? ` ${(j.latency_ms/1000).toFixed(0)}s` : '';
+      const bk  = j.backend_used ? ` <span style="color:#484f58">${j.backend_used}</span>` : '';
+      return `<span style="margin-right:10px;color:${c}">#${j.id} ${j.kind}${lat}${bk}</span>`;
+    }).join('');
+    const head = `<span style="color:#3fb950">queued:${s.queued||0}</span>`
+               + ` <span style="color:#58a6ff">running:${s.running||0}</span>`
+               + ` <span style="color:#8b949e">done24h:${s.done_24h||0}</span>`
+               + (s.failed_24h ? ` <span style="color:#f85149">fail24h:${s.failed_24h}</span>` : '')
+               + ` <span style="color:#484f58">tok24h:${s.tokens_24h||0}</span>`;
+    $id('lazy-inner').innerHTML = head + ' &nbsp; ' + recent;
+  } catch(e) { console.error('lazyQueue', e); $id('lazy-inner').textContent = '— error —'; }
+}
+
 async function fetchNodes() {
   try {
     const r  = await fetch('/api/nodes');
@@ -1390,12 +1418,14 @@ fetchRouting();
 fetchDecisions();
 loadSavings();
 fetchCensorTop();
+fetchLazyQueue();
 setInterval(fetchSigs,      3000);
 setInterval(fetchNodes,    30000);
 setInterval(fetchRouting,  60000);
 setInterval(fetchDecisions, 5000);
 setInterval(loadSavings,   60000);
 setInterval(fetchCensorTop, 300000);
+setInterval(fetchLazyQueue,  10000);
 </script>
 </body>
 </html>

@@ -131,6 +131,41 @@ class RequestLogDB:
                 )
             except sqlite3.OperationalError:
                 pass
+        # Lazy queue table — not-urgent jobs offloaded to local LLMs (LM Studio,
+        # Ollama-hoster) с fallback на cloud. См. docs/LAZY_QUEUE.md.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS lazy_jobs (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts_created      TEXT NOT NULL,
+                ts_started      TEXT,
+                ts_done         TEXT,
+                from_agent      TEXT,
+                from_node       TEXT,
+                kind            TEXT NOT NULL,
+                system_prompt   TEXT,
+                user_prompt     TEXT NOT NULL,
+                max_tokens      INTEGER DEFAULT 600,
+                temperature     REAL DEFAULT 0.3,
+                priority        INTEGER DEFAULT 3,
+                deadline_ts     REAL,
+                status          TEXT NOT NULL DEFAULT 'queued',
+                model_used      TEXT,
+                backend_used    TEXT,
+                output          TEXT,
+                tokens_in       INTEGER,
+                tokens_out      INTEGER,
+                latency_ms      INTEGER,
+                retries         INTEGER DEFAULT 0,
+                error           TEXT
+            )
+        """)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lazy_status_pri "
+            "ON lazy_jobs(status, priority, ts_created)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lazy_agent ON lazy_jobs(from_agent, ts_created)"
+        )
         self._conn.commit()
         logger.info("db_initialized", path=str(self._path))
 
