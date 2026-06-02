@@ -60,6 +60,60 @@ curl -X POST "http://127.0.0.1:9093/keymaster/pre_approve?name=<NAME>&requester=
 
 Если ты на другой ноде — попроси Klod-Access или Бориса это сделать.
 
+## 3.5 Vision (картинки) — LM Studio gemma-4-e4b-it вместо платного Gemini
+
+В федерации есть **бесплатный мультимодальный LLM** — `gemma-4-e4b-it` на LM Studio (hyperv через SSH-туннель). Принимает картинки в OpenAI-vision формате:
+
+```python
+import httpx, base64
+img_b64 = base64.b64encode(open("photo.jpg","rb").read()).decode()
+
+r = httpx.post(
+    "http://10.66.0.1:9090/proxy/lm-studio/v1/chat/completions",
+    headers={"X-Agent-Name": "<твой_id>", "Authorization":"Bearer local"},
+    json={
+        "model": "gemma-4-e4b-it",      # точное имя, БЕЗ префикса google/
+        "messages":[{"role":"user","content":[
+            {"type":"text","text":"Что на этой картинке? 1-2 предложения."},
+            {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{img_b64}"}}
+        ]}],
+        "max_tokens": 200,
+    }, timeout=120,
+).json()
+print(r["choices"][0]["message"]["content"])
+```
+
+Что важно:
+- `gemma-4-e4b-it` (НЕ `google/gemma-4-e4b`) — точный identifier модели в LM Studio.
+- Поддерживается: `image/jpeg`, `image/png`, `image/webp`, base64 data URLs.
+- Latency на CPU: 3-20 секунд за картинку. Для **batch'а** используй Lazy Queue с `kind="vision"` / `"ocr"` / `"caption"` / `"describe"` — поставится в очередь, worker сам обработает.
+- Качество: уровень Gemini-flash для типичных задач (описание, OCR, классификация). Для precision-критичных задач (медицина/документы строгой формы) — всё равно Gemini Pro.
+
+### Через Lazy Queue (когда не срочно)
+
+```python
+from lazy_client import submit_and_wait
+caption = submit_and_wait(
+    kind="caption",
+    prompt='{"img_b64":"...", "ask":"одной фразой что на фото"}',
+    from_agent="<твой_id>@<node>",
+    max_tokens=80, timeout=180,
+)
+```
+
+Worker сам распакует JSON, отдаст gemma vision-API, вернёт текст. **Стоимость: $0.**
+
+### Рецепт для ЭШколы
+
+В обучающем приложении для подростков:
+- Распознавание задач со скрина (домашка, фото тетради) → `kind="ocr"` через gemma.
+- Captioning к illustration → `kind="caption"`.
+- Поиск ошибок в работе ученика по фото → `kind="describe"` с приложенным system-prompt «оцени и подскажи».
+- Если задача требует precision (распознать формулу/диаграмму) — поднимай priority и Lazy Queue фолбэкнет на Gemini-flash через rproxy (по нашим правилам).
+
+Раньше: `gemini-2.5-flash` для каждой картинки ≈ $0.15/M tokens-in. На 1000 уроков с фото ≈ $1.50.  
+Теперь: те же 1000 уроков через gemma-4-e4b-it ≈ **$0**. Sleeping latency только.
+
 ## 4. LLM-вызовы — только через Lineman reverse-proxy
 
 Все LLM-провайдеры доступны на единых эндпоинтах:

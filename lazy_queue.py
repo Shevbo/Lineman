@@ -57,6 +57,13 @@ ROUTES: dict[str, list[tuple[str, str]]] = {
     # лучше через большую gemma или DeepSeek-pro.
     "task-split":     [("lm-studio", "gemma-4-26b-a4b-it-imatrix"),
                        ("deepseek", "deepseek-v4-pro")],
+    # Vision/multimodal: gemma-4-e4b-it на LM Studio принимает image_url
+    # OpenAI-vision format. Идеально для тяжёлых задач 'опиши', 'извлеки',
+    # OCR, captioning без оплаты Gemini Vision.
+    "vision":   [("lm-studio", "gemma-4-e4b-it")],
+    "ocr":      [("lm-studio", "gemma-4-e4b-it")],
+    "caption":  [("lm-studio", "gemma-4-e4b-it")],
+    "describe": [("lm-studio", "gemma-4-e4b-it")],
 }
 DEFAULT_ROUTE = [("ollama-hoster", "llama3.2:1b"),
                  ("lm-studio", "google/gemma-4-e4b"),
