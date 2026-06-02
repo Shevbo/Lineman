@@ -159,6 +159,54 @@ requests.post(
 
 `proxies=...` для Telegram обязательно — без него запрос пойдёт прямо и упрётся в геоблок RU.
 
+## 5.5 OAuth-токены (hh.ru, Polar, Google OAuth, Claude OAuth)
+
+Если твой провайдер использует OAuth (refresh-token grant flow) — НЕ обновляй access_token руками и НЕ клади его в Ключник. Стандарт OAuth Self-Refresh: Keymaster сам обновляет токен перед каждой выдачей.
+
+### Что от тебя нужно
+
+Однократно при подключении нового OAuth-провайдера:
+
+1. Пройти OAuth-login пользователем — получить начальные `access_token` + `refresh_token`.
+2. Попросить Борю (через `klod_client.ask`) залить четыре значения через TG-бота Ключника:
+   - `<PROV>_CLIENT_ID`
+   - `<PROV>_CLIENT_SECRET`
+   - `<PROV>_REFRESH_TOKEN` (начальный)
+   - `<PROV>_ACCESS_TOKEN` (начальный)
+3. Попросить запустить:
+   ```bash
+   ~/keymaster/skills/oauth_register.py <PROV>_ACCESS_TOKEN \
+       https://provider.example/oauth/token \
+       <PROV>_CLIENT_ID <PROV>_CLIENT_SECRET <PROV>_REFRESH_TOKEN \
+       --margin 600 --auth post_body
+   ```
+   Опции `--auth`: `post_body` (default, hh.ru/Polar/Google), `basic`, `json`.
+
+### Что происходит дальше
+
+```python
+token = get("HH_ACCESS_TOKEN", requester="career-bot@smain",
+            purpose="hh.ru API calls")
+```
+
+Под капотом:
+- Keymaster проверяет `expires_at - now < refresh_margin_s`.
+- Если близко к истечению — POST на `refresh_url` с grant_type=refresh_token. Без LLM. Без Бори.
+- Обновляет access (+refresh если провайдер ротировал).
+- Отдаёт тебе свежий токен.
+
+Ты получаешь прозрачно свежий токен. Никаких рестартов твоего процесса. Никаких новых endpoint'ов в Keymaster.
+
+### Если refresh_token истёк
+
+Это случается крайне редко (у hh.ru ~год). Keymaster логирует ошибку в `~/.keymaster/audit.log`, я получу автоматический алёрт, Боре придёт TG-инструкция «пользователь должен переавторизоваться через OAuth». Ты в это время будешь получать `deliver:value` со старым (мёртвым) access_token — детектируешь HTTP 401 и зови `complain()`.
+
+### Что НЕ менять в твоём коде
+
+- `klod_keymaster.get()` остаётся тем же. Refresh прозрачен.
+- Никаких новых helper'ов. Никаких новых endpoint'ов.
+- Запрет на write от агентов сохраняется. HTTP `/keymaster/store` остаётся 403.
+
 ## 6. Ротация — твоя реакция
 
 Когда Боря присылает новое значение секрета через TG-бота Ключника, Keymaster автоматически шлёт `signal type=key_rotated key_name=<NAME> to_service=<your_agent_id>` через Lineman.
