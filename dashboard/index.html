@@ -1314,11 +1314,15 @@ async function fetchLazyQueue() {
       const bk  = j.backend_used ? ` <span style="color:#484f58">${j.backend_used}</span>` : '';
       return `<span style="margin-right:10px;color:${c}">#${j.id} ${j.kind}${lat}${bk}</span>`;
     }).join('');
+    const saved24h = Number(s.saved_usd_24h || 0).toFixed(4);
+    const savedTotal = Number(s.saved_usd_total || 0).toFixed(2);
     const head = `<span style="color:#3fb950">queued:${s.queued||0}</span>`
                + ` <span style="color:#58a6ff">running:${s.running||0}</span>`
                + ` <span style="color:#8b949e">done24h:${s.done_24h||0}</span>`
                + (s.failed_24h ? ` <span style="color:#f85149">fail24h:${s.failed_24h}</span>` : '')
-               + ` <span style="color:#484f58">tok24h:${s.tokens_24h||0}</span>`;
+               + ` <span style="color:#484f58">tok24h:${s.tokens_24h||0}</span>`
+               + ` <span style="color:#3fb950;font-weight:700">saved $${saved24h}/24h</span>`
+               + ` <span style="color:#484f58">total $${savedTotal}</span>`;
     $id('lazy-inner').innerHTML = head + ' &nbsp; ' + recent;
   } catch(e) { console.error('lazyQueue', e); $id('lazy-inner').textContent = '— error —'; }
 }

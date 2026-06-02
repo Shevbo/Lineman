@@ -58,6 +58,33 @@ DEFAULT_ROUTE = [("ollama-hoster", "llama3.2:1b"),
                  ("lm-studio", "google/gemma-4-e4b"),
                  ("deepseek", "deepseek-v4-flash")]
 
+# Local backends = zero cost. Если job ушёл на один из них вместо платного,
+# считаем экономию относительно baseline-цены (deepseek-v4-flash по умолчанию,
+# для тяжёлых kind — deepseek-v4-pro как разумная замена).
+LOCAL_BACKENDS = {"ollama-hoster", "lm-studio"}
+
+# USD per 1M tokens (from config.json pricing на 2026-06)
+BASELINE_PRICE_FLASH = {"in": 0.14, "out": 0.28}  # deepseek-v4-flash
+BASELINE_PRICE_PRO   = {"in": 0.435, "out": 0.87}  # deepseek-v4-pro
+
+# kinds которые «дороже» (reasoning/24K+ context), baseline = pro
+PRO_BASELINE_KINDS = {"reason", "critique", "summarise", "sweep_secsan"}
+
+
+def compute_saved_usd(backend: str, kind: str, tokens_in: int, tokens_out: int) -> float:
+    """Сколько долларов сэкономлено благодаря local backend.
+
+    0.0 если ушло на платный backend (никакой экономии — это «настоящая» цена).
+    Иначе: цена baseline-модели × actual tokens.
+    """
+    if backend not in LOCAL_BACKENDS:
+        return 0.0
+    price = BASELINE_PRICE_PRO if kind in PRO_BASELINE_KINDS else BASELINE_PRICE_FLASH
+    return round(
+        (tokens_in * price["in"] + tokens_out * price["out"]) / 1_000_000,
+        6,
+    )
+
 
 # ────────────────────────────── DB helpers ──────────────────────────────
 
@@ -103,14 +130,16 @@ def claim_next() -> dict | None:
 
 
 def complete_job(job_id: int, *, output: str, model: str, backend: str,
-                 tokens_in: int, tokens_out: int, latency_ms: int) -> None:
+                 tokens_in: int, tokens_out: int, latency_ms: int,
+                 kind: str = "") -> None:
+    saved = compute_saved_usd(backend, kind, tokens_in, tokens_out)
     with _conn() as c:
         c.execute(
             "UPDATE lazy_jobs SET status='done', ts_done=?, output=?, "
-            "model_used=?, backend_used=?, tokens_in=?, tokens_out=?, latency_ms=? "
-            "WHERE id=?",
+            "model_used=?, backend_used=?, tokens_in=?, tokens_out=?, latency_ms=?, "
+            "saved_usd=? WHERE id=?",
             (datetime.now(timezone.utc).isoformat(), output, model, backend,
-             tokens_in, tokens_out, latency_ms, job_id),
+             tokens_in, tokens_out, latency_ms, saved, job_id),
         )
 
 
@@ -133,7 +162,7 @@ def list_jobs(*, from_agent: str | None = None, status: str | None = None,
               limit: int = 50) -> list[dict]:
     q = "SELECT id, ts_created, ts_started, ts_done, from_agent, from_node, " \
         "kind, status, model_used, backend_used, tokens_in, tokens_out, " \
-        "latency_ms, priority FROM lazy_jobs WHERE 1=1"
+        "latency_ms, priority, saved_usd FROM lazy_jobs WHERE 1=1"
     params: list[Any] = []
     if from_agent:
         q += " AND from_agent=?"; params.append(from_agent)
@@ -159,10 +188,18 @@ def stats_24h() -> dict:
               SUM(CASE WHEN status='running' THEN 1 ELSE 0 END) AS running,
               SUM(CASE WHEN status='done' AND ts_done > datetime('now','-1 day') THEN 1 ELSE 0 END) AS done_24h,
               SUM(CASE WHEN status='failed' AND ts_done > datetime('now','-1 day') THEN 1 ELSE 0 END) AS failed_24h,
-              SUM(CASE WHEN ts_done > datetime('now','-1 day') THEN COALESCE(tokens_in,0)+COALESCE(tokens_out,0) ELSE 0 END) AS tokens_24h
+              SUM(CASE WHEN ts_done > datetime('now','-1 day') THEN COALESCE(tokens_in,0)+COALESCE(tokens_out,0) ELSE 0 END) AS tokens_24h,
+              SUM(CASE WHEN ts_done > datetime('now','-1 day') THEN COALESCE(saved_usd,0) ELSE 0 END) AS saved_usd_24h,
+              SUM(COALESCE(saved_usd,0)) AS saved_usd_total
             FROM lazy_jobs
         """).fetchone()
-    return {k: (row[k] or 0) for k in row.keys()} if row else {}
+    if not row:
+        return {}
+    out = {k: (row[k] or 0) for k in row.keys()}
+    # USD округлим до 4 знаков для отображения
+    for k in ("saved_usd_24h", "saved_usd_total"):
+        out[k] = round(float(out.get(k) or 0), 4)
+    return out
 
 
 # ───────────────────── HTTP call to backend via Lineman ─────────────────

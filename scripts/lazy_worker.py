@@ -43,9 +43,12 @@ def process(job: dict) -> None:
             lq.complete_job(
                 job["id"], output=content, model=model, backend=backend,
                 tokens_in=tin, tokens_out=tout, latency_ms=latency,
+                kind=job.get("kind", ""),
             )
+            saved = lq.compute_saved_usd(backend, job.get("kind", ""), tin, tout)
+            saved_str = f" saved=${saved:.4f}" if saved > 0 else ""
             print(f"[lazy] id={job['id']} kind={job['kind']} → {backend}/{model} "
-                  f"in={tin} out={tout} lat={latency}ms")
+                  f"in={tin} out={tout} lat={latency}ms{saved_str}")
             return
         except Exception as e:
             last_err = f"{backend}/{model}: {type(e).__name__}: {str(e)[:120]}"

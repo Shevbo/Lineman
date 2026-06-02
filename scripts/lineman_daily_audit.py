@@ -123,8 +123,11 @@ def _keymaster_audit() -> dict:
 
 
 def _lazy_queue_audit() -> dict:
-    """Lazy Queue: 24h throughput, hit-rate per backend, top kinds, p95 latency."""
-    out: dict = {"total": 0, "by_status": {}, "by_backend": {}, "by_kind": {}, "p95_ms": 0}
+    """Lazy Queue: 24h throughput, hit-rate per backend, top kinds, p95 latency,
+    saved $ vs paid-baseline."""
+    out: dict = {"total": 0, "by_status": {}, "by_backend": {}, "by_kind": {},
+                 "p95_ms": 0, "saved_24h_usd": 0.0, "saved_total_usd": 0.0,
+                 "local_share_pct": 0.0}
     try:
         con = sqlite3.connect(DB)
         cur = con.cursor()
@@ -136,12 +139,23 @@ def _lazy_queue_audit() -> dict:
             WHERE ts_created > datetime('now','-1 day') GROUP BY status
         """):
             out["by_status"][row[0]] = row[1]
+        local_calls = paid_calls = 0
         for row in cur.execute("""
-            SELECT backend_used, COUNT(*), SUM(COALESCE(tokens_in,0)+COALESCE(tokens_out,0))
+            SELECT backend_used, COUNT(*), SUM(COALESCE(tokens_in,0)+COALESCE(tokens_out,0)),
+                   SUM(COALESCE(saved_usd,0))
             FROM lazy_jobs WHERE status='done' AND ts_done > datetime('now','-1 day')
             GROUP BY backend_used ORDER BY 2 DESC
         """):
-            out["by_backend"][row[0] or "?"] = {"calls": row[1], "tokens": row[2] or 0}
+            backend, calls, toks, saved = row[0] or "?", row[1], row[2] or 0, row[3] or 0.0
+            out["by_backend"][backend] = {
+                "calls": calls, "tokens": toks, "saved_usd": round(saved, 4),
+            }
+            if backend in ("ollama-hoster", "lm-studio"):
+                local_calls += calls
+            else:
+                paid_calls += calls
+        total_done = local_calls + paid_calls
+        out["local_share_pct"] = round(100.0 * local_calls / total_done, 1) if total_done else 0.0
         for row in cur.execute("""
             SELECT kind, COUNT(*) FROM lazy_jobs
             WHERE ts_created > datetime('now','-1 day') GROUP BY kind ORDER BY 2 DESC LIMIT 5
@@ -153,6 +167,15 @@ def _lazy_queue_audit() -> dict:
         ).fetchall()]
         if lats:
             out["p95_ms"] = int(lats[max(0, int(len(lats) * 0.95) - 1)])
+        saved_24h = cur.execute(
+            "SELECT SUM(COALESCE(saved_usd,0)) FROM lazy_jobs "
+            "WHERE ts_done > datetime('now','-1 day')"
+        ).fetchone()[0] or 0.0
+        saved_total = cur.execute(
+            "SELECT SUM(COALESCE(saved_usd,0)) FROM lazy_jobs"
+        ).fetchone()[0] or 0.0
+        out["saved_24h_usd"] = round(float(saved_24h), 4)
+        out["saved_total_usd"] = round(float(saved_total), 4)
         con.close()
     except Exception as e:
         out["error"] = str(e)
@@ -356,6 +379,9 @@ def main() -> int:
         f"- by backend: {lq.get('by_backend') or {}}",
         f"- top kinds: {lq.get('by_kind') or {}}",
         f"- p95 latency: {lq.get('p95_ms', 0)}ms",
+        f"- local share: {lq.get('local_share_pct', 0)}%  ← доля задач выполненных бесплатно",
+        f"- **saved 24h: ${lq.get('saved_24h_usd', 0):.4f}**  (если бы шло на DeepSeek-flash/pro)",
+        f"- saved total: ${lq.get('saved_total_usd', 0):.4f}",
     ]
     if lq.get("by_status", {}).get("failed", 0) > 5:
         actions.append(f"P1: lazy_queue {lq['by_status']['failed']} failed jobs за сутки — расследовать.")

@@ -166,6 +166,11 @@ class RequestLogDB:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lazy_agent ON lazy_jobs(from_agent, ts_created)"
         )
+        # New column for cost accounting (saved $ vs paid-equivalent baseline)
+        try:
+            self._conn.execute("ALTER TABLE lazy_jobs ADD COLUMN saved_usd REAL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         self._conn.commit()
         logger.info("db_initialized", path=str(self._path))
 
