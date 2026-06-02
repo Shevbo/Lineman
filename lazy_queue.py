@@ -53,6 +53,10 @@ ROUTES: dict[str, list[tuple[str, str]]] = {
                        ("ollama-hoster", "llama3.2:1b")],
     "sweep_leaks":    [("lm-studio", "google/gemma-4-e4b"),
                        ("ollama-hoster", "llama3.2:1b")],
+    # task-split: разбиение большой задачи на N мелких — нужен chain-of-thought,
+    # лучше через большую gemma или DeepSeek-pro.
+    "task-split":     [("lm-studio", "gemma-4-26b-a4b-it-imatrix"),
+                       ("deepseek", "deepseek-v4-pro")],
 }
 DEFAULT_ROUTE = [("ollama-hoster", "llama3.2:1b"),
                  ("lm-studio", "google/gemma-4-e4b"),
@@ -69,6 +73,20 @@ BASELINE_PRICE_PRO   = {"in": 0.435, "out": 0.87}  # deepseek-v4-pro
 
 # kinds которые «дороже» (reasoning/24K+ context), baseline = pro
 PRO_BASELINE_KINDS = {"reason", "critique", "summarise", "sweep_secsan"}
+
+# System-prompt overlays: добавляются в начало system_prompt по флагу.
+# terse — caveman-style, до 65% экономии output tokens на черновых задачах.
+TERSE_OVERLAY = (
+    "Reply in ≤80 words. No preamble. No closing. No pleasantries. "
+    "No 'I think', no 'sure', no 'great question'. "
+    "Bullet points or numbered list when possible. "
+    "Code only when explicitly asked. "
+    "Если нужен русский — короткие фразы, без воды, без эмоджи."
+)
+
+
+def with_terse_overlay(system_prompt: str) -> str:
+    return TERSE_OVERLAY + ("\n\n" + system_prompt if system_prompt else "")
 
 
 def compute_saved_usd(backend: str, kind: str, tokens_in: int, tokens_out: int) -> float:
@@ -110,6 +128,55 @@ def submit_job(*, from_agent: str, from_node: str, kind: str,
              max_tokens, temperature, priority, deadline),
         )
         return cur.lastrowid
+
+
+SPLIT_SYSTEM = (
+    "You split a large task into a list of small atomic subtasks. "
+    "Each subtask must be independent, with minimal shared context, "
+    "and answerable by a 1B-3B model. "
+    "Output STRICT JSON only, no markdown, format: "
+    '{"subtasks":[{"kind":"...","prompt":"...","max_tokens":NN},...]} '
+    "kinds: tune, eval, lint, html, css, summarise, critique. "
+    "Choose 3-10 subtasks. No prose, only the JSON."
+)
+
+
+def parse_split_response(text: str) -> list[dict]:
+    """Извлечь subtasks из ответа LLM. Прощает markdown-обёртку и trailing prose."""
+    s = text.strip()
+    # Срезать markdown code-fence
+    if s.startswith("```"):
+        lines = s.split("\n")
+        if lines[-1].strip() in ("```", ""):
+            lines = lines[:-1]
+        s = "\n".join(lines[1:])
+    # Найти первый valid JSON object
+    try:
+        data = json.loads(s)
+    except Exception:
+        # Найти {"subtasks":...}
+        start = s.find("{")
+        end = s.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(s[start:end + 1])
+            except Exception:
+                return []
+        else:
+            return []
+    subs = data.get("subtasks") if isinstance(data, dict) else None
+    if not isinstance(subs, list):
+        return []
+    out = []
+    for st in subs[:10]:  # cap N=10
+        if not isinstance(st, dict):
+            continue
+        k = str(st.get("kind") or "tune")
+        p = str(st.get("prompt") or "")
+        mx = int(st.get("max_tokens") or 400)
+        if p and k:
+            out.append({"kind": k, "prompt": p, "max_tokens": mx})
+    return out
 
 
 def claim_next() -> dict | None:

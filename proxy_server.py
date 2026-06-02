@@ -356,6 +356,14 @@ class ProxyServer:
                 await self._raw_api_lazy_queue(rd, wr, request_path, method)
                 return
 
+            elif request_path_only == "/api/budget":
+                await self._raw_api_budget(rd, wr)
+                return
+
+            elif request_path_only == "/api/keymaster/leak_alert" and method == "POST":
+                await self._raw_api_leak_alert(rd, wr)
+                return
+
             # Agent-to-agent messaging API
             # /api/agent/{target_agent_id}/message?from=<from_agent_id>&message=<msg>
             elif request_path_only.startswith("/api/agent/"):
@@ -943,6 +951,129 @@ class ProxyServer:
                 return
 
             self._send_simple_and_close(wr, 400, {"error": f"unsupported {method} {request_path}"})
+        except Exception as e:
+            self._send_simple_and_close(wr, 500, {"error": str(e)})
+
+    async def _raw_api_leak_alert(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+    ) -> None:
+        """POST /api/keymaster/leak_alert — агент сообщает что нашёл утечку.
+
+        Body: {"secret_name": "X|null", "where": "...", "snippet": "...",
+               "source_agent": "...", "severity": "high|medium|low"}
+        Действие: secret_leak_alert.report_leak → klod-inbox + TG + auto-rotate.
+        """
+        headers: dict[str, str] = {}
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+            decoded = hdr.decode("utf-8", errors="replace").strip()
+            if ": " in decoded:
+                k, v = decoded.split(": ", 1)
+                headers[k.lower()] = v
+        cl = int(headers.get("content-length", "0") or "0")
+        body = await asyncio.wait_for(rd.read(min(cl, 16384)), timeout=10) if cl > 0 else b""
+        try:
+            d = json.loads(body) if body else {}
+            from secret_leak_alert import report_leak
+            rec = report_leak(
+                secret_name=d.get("secret_name"),
+                where=str(d.get("where") or "?"),
+                snippet=str(d.get("snippet") or ""),
+                source_agent=str(d.get("source_agent") or "?"),
+                severity=str(d.get("severity") or "high"),
+            )
+            self._send_simple_and_close(wr, 200, rec)
+        except Exception as e:
+            self._send_simple_and_close(wr, 500, {"error": str(e)})
+
+    async def _raw_api_budget(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+    ) -> None:
+        """GET /api/budget — текущий расход за месяц по провайдерам vs лимиты.
+
+        Возвращает: {provider: {used_usd, limit_usd, pct, status, top_models[]}}
+        Используется dashboard widget + daily_audit алёрты.
+        """
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+        try:
+            budget_cfg = (self._config.get("budget") or {})
+            pricing = (self._config.get("pricing") or {}).get("models") or {}
+            limits = {
+                "anthropic":  float(budget_cfg.get("anthropic_monthly_usd") or 0),
+                "deepseek":   float(budget_cfg.get("deepseek_monthly_usd") or 0),
+                "google":     float(budget_cfg.get("google_monthly_usd") or 0),
+                "openai":     float(budget_cfg.get("openai_monthly_usd") or 0),
+                "openrouter": float(budget_cfg.get("openrouter_monthly_usd") or 0),
+            }
+            alert_pct = float(budget_cfg.get("alert_threshold_pct") or 90)
+
+            import sqlite3 as _sql
+            con = _sql.connect(str(self._db._path))
+            cur = con.cursor()
+            # Расход с начала текущего месяца
+            rows = cur.execute("""
+                SELECT llm_provider, llm_model,
+                       SUM(COALESCE(tokens_in,0)) as tin,
+                       SUM(COALESCE(tokens_out,0)) as tout,
+                       COUNT(*) as calls
+                FROM request_log
+                WHERE timestamp >= strftime('%Y-%m-01T00:00:00', 'now')
+                  AND llm_provider IS NOT NULL AND llm_provider != ''
+                GROUP BY llm_provider, llm_model
+            """).fetchall()
+            con.close()
+
+            by_provider: dict[str, dict] = {}
+            for provider, model, tin, tout, calls in rows:
+                price = pricing.get(model) or pricing.get((model or "").split("/")[-1]) or {}
+                in_usd  = (tin or 0) * float(price.get("in") or 0) / 1_000_000
+                out_usd = (tout or 0) * float(price.get("out") or 0) / 1_000_000
+                cost = in_usd + out_usd
+                p = by_provider.setdefault(provider, {"used_usd": 0.0, "calls": 0, "tokens": 0, "top_models": []})
+                p["used_usd"] = round(p["used_usd"] + cost, 4)
+                p["calls"] += int(calls or 0)
+                p["tokens"] += int((tin or 0) + (tout or 0))
+                p["top_models"].append({"model": model or "?", "calls": calls, "cost_usd": round(cost, 4)})
+            for prov in list(by_provider.keys()):
+                limit = limits.get(prov, 0)
+                used = by_provider[prov]["used_usd"]
+                pct = round(100.0 * used / limit, 1) if limit > 0 else 0.0
+                by_provider[prov].update({
+                    "limit_usd": limit,
+                    "pct": pct,
+                    "status": "red" if pct >= alert_pct else "yellow" if pct >= 70 else "green",
+                })
+                by_provider[prov]["top_models"] = sorted(
+                    by_provider[prov]["top_models"], key=lambda x: -x["cost_usd"]
+                )[:3]
+            # Также Lazy Queue saved
+            lazy_saved = 0.0
+            try:
+                con = _sql.connect(str(self._db._path))
+                saved = con.execute(
+                    "SELECT SUM(COALESCE(saved_usd,0)) FROM lazy_jobs "
+                    "WHERE ts_done >= strftime('%Y-%m-01T00:00:00', 'now')"
+                ).fetchone()[0]
+                lazy_saved = round(float(saved or 0), 4)
+                con.close()
+            except Exception:
+                pass
+            import datetime as _dt
+            self._send_simple_and_close(wr, 200, {
+                "month": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m"),
+                "providers": by_provider,
+                "alert_threshold_pct": alert_pct,
+                "lazy_saved_month_usd": lazy_saved,
+            })
         except Exception as e:
             self._send_simple_and_close(wr, 500, {"error": str(e)})
 

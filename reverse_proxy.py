@@ -199,6 +199,47 @@ UPSTREAM_MAP: dict[str, str] = {
     "google": "https://generativelanguage.googleapis.com",
 }
 
+# Минимальное число токенов system-prompt, после которого Lineman сам
+# включает Anthropic ephemeral prompt-caching. Кэшированные input-токены
+# в Anthropic стоят 0.1× от обычных — экономия до 90% на повторяющемся
+# system prompt в длинных сессиях.
+_CACHE_MIN_SYSTEM_TOKENS = 1024
+
+
+def _inject_anthropic_prompt_cache(req_body: bytes) -> bytes:
+    """Анализирует Anthropic-style payload и помечает большой system-prompt
+    как `cache_control: {"type": "ephemeral"}`. Идемпотентно — если cache_control
+    уже есть, ничего не меняет. Тихо возвращает оригинал при любой ошибке.
+    """
+    if not req_body or len(req_body) < 2000:
+        return req_body
+    try:
+        data = json.loads(req_body)
+    except Exception:
+        return req_body
+    if not isinstance(data, dict):
+        return req_body
+    system = data.get("system")
+    changed = False
+    # Anthropic поддерживает `system` либо строкой, либо списком блоков
+    if isinstance(system, str) and len(system) // 4 >= _CACHE_MIN_SYSTEM_TOKENS:
+        data["system"] = [{"type": "text", "text": system,
+                           "cache_control": {"type": "ephemeral"}}]
+        changed = True
+    elif isinstance(system, list):
+        for block in system:
+            if not isinstance(block, dict):
+                continue
+            text = block.get("text", "")
+            if (isinstance(text, str)
+                    and len(text) // 4 >= _CACHE_MIN_SYSTEM_TOKENS
+                    and "cache_control" not in block):
+                block["cache_control"] = {"type": "ephemeral"}
+                changed = True
+    if not changed:
+        return req_body
+    return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
 _READ_TIMEOUT = 30.0
 _STREAM_TIMEOUT = 180.0
 _BODY_MAX = 4 * 1024 * 1024
@@ -616,6 +657,15 @@ async def handle_reverse_proxy(
         except Exception:
             pass
 
+    # Anthropic ephemeral prompt cache — для повторяющегося system-prompt.
+    # Anthropic API даёт ~90% скидку на cached input. Lineman сам добавляет
+    # cache_control блоку, агент про это знать не обязан.
+    if req_body and provider == "anthropic":
+        try:
+            req_body = _inject_anthropic_prompt_cache(req_body)
+        except Exception:
+            pass
+
     # Build forwarded headers
     fwd_headers: dict[str, str] = {
         k: v for k, v in req_headers.items() if k not in _HOP_BY_HOP
@@ -797,6 +847,7 @@ async def handle_reverse_proxy(
                 "source_agent": agent_name,
                 "llm_provider": provider,
                 "llm_model": req_model,
+                "request_headers_masked": _mask_sensitive(json.dumps(req_headers)) if req_headers else None,
                 "request_body": _mask_sensitive(req_body.decode("utf-8", errors="replace"))[:4096] if req_body else None,
                 "request_size": len(req_body) if req_body else 0,
                 "tokens_in": tokens_in,
@@ -809,7 +860,7 @@ async def handle_reverse_proxy(
                 "status_code": status_code,
                 "error": error_str,
                 "latency_ms": latency_ms,
-                "target_url": upstream_url,
+                "target_url": _mask_sensitive(upstream_url) if upstream_url else None,
                 "target_host": provider,
             }
             masked_row = mask_row(row)

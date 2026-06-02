@@ -113,6 +113,38 @@ requests.post(
 
 Если не используешь watcher — обязан опрашивать `/api/signals?since=N` каждые 30 секунд и при `type=key_rotated key_name=<X>` вызывать `klod_keymaster.on_rotation("<X>")`.
 
+## 6.5 Что делать если ты увидел утечку секрета
+
+**Обнаружив строку похожую на секрет** — в чужом чате, в request body, в коммите, в логе, в файле, в issue tracker — НЕМЕДЛЕННО:
+
+```python
+import urllib.request, json
+urllib.request.urlopen(urllib.request.Request(
+    "http://10.66.0.1:9090/api/keymaster/leak_alert",
+    data=json.dumps({
+        "secret_name": None,                # или конкретное имя если знаешь
+        "where": "chat:agent-X/msg-42",     # или file:path:line / request_log:N
+        "snippet": "<первые 24 символа>",   # или полный, маска применится
+        "source_agent": "<твой agent_id>@<node>",
+        "severity": "high",
+    }).encode(),
+    method="POST",
+    headers={"Content-Type": "application/json"},
+), timeout=4).read()
+```
+
+Что произойдёт **автоматически** (без LLM, без задержек):
+
+1. Запись в `~/.keymaster/leak_alerts.log` (audit).
+2. Сообщение в Klod-Access inbox с пометкой `ROTATION_NEEDED` — я увижу в начале моей следующей сессии вместе с context.
+3. TG-уведомление Борису через `@ShectoryKeyMasterBot` со снэппетом и инструкцией.
+4. **Auto-rotation** для internal токенов (`*GATEWAY*`/`*INTERNAL*`/`*AUTH_BRIDGE*`): keymaster сам сгенерирует `openssl rand -hex 24` и опубликует новое значение. Старое мёртвое через секунды.
+5. Для external (TG bot / Google API / DeepSeek / OpenAI): Боре приходит готовый гайд «зайди сюда, revoke здесь, пришли новое в формате X». 
+
+Время от «нашёл утечку» до «старый токен мёртв» — секунды для internal, минуты для external.
+
+**Не пытайся** угадывать какой это секрет или ждать что Боря сам заметит. Просто шли алёрт — секрет может быть фейковый, тогда ничего страшного не случится. Если настоящий — спас федерацию.
+
 ## 7. Жалобы / связь с Klod-Access
 
 Когда что-то непонятно или сломалось:

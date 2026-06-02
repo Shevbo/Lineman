@@ -188,6 +188,15 @@
     "state_file": "state.json",
     "metrics_file": "metrics.json"
   },
+  "budget": {
+    "note": "Месячные лимиты на расход — для прогресс-баров в dashboard и P0-алертов при > 90%.",
+    "anthropic_monthly_usd": 200,
+    "deepseek_monthly_usd": 50,
+    "google_monthly_usd": 100,
+    "openai_monthly_usd": 20,
+    "openrouter_monthly_usd": 10,
+    "alert_threshold_pct": 90
+  },
   "pricing": {
     "source": "docs/llm-pricing-2026-05.md",
     "updated": "2026-05-17",
@@ -253,7 +262,12 @@
         "out": 0.0,
         "ctx_k": 8,
         "note": "LM Studio hyperv"
-      }
+      },
+      "claude-opus-4-7":  { "in": 15.0, "out": 75.0, "ctx_k": 200, "note": "Anthropic Opus" },
+      "claude-opus-4-8":  { "in": 15.0, "out": 75.0, "ctx_k": 200, "note": "Anthropic Opus" },
+      "claude-sonnet-4-6":{ "in": 3.0,  "out": 15.0, "ctx_k": 200, "note": "Anthropic Sonnet" },
+      "claude-sonnet-4-7":{ "in": 3.0,  "out": 15.0, "ctx_k": 200, "note": "Anthropic Sonnet" },
+      "claude-haiku-4-5-20251001": { "in": 0.8, "out": 4.0, "ctx_k": 200, "note": "Anthropic Haiku" }
     }
   },
   "dedup_cache": {

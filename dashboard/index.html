@@ -478,6 +478,12 @@ body {
   <span id="lazy-inner" style="color:#484f58;font-size:10px">loading…</span>
 </div>
 
+<!-- Budget strip -->
+<div id="budget-strip" style="flex-shrink:0;padding:4px 14px;background:#0d1117;border-top:1px solid #21262d;font-size:11px;color:#8b949e;display:flex;gap:14px;align-items:center;overflow-x:auto;white-space:nowrap">
+  <span style="color:#e3b341;font-weight:700">BUDGET (месяц):</span>
+  <span id="budget-inner" style="color:#484f58;font-size:10px">loading…</span>
+</div>
+
 <!-- log strip -->
 <div id="logstrip">
   <span id="log-title">SIGNALS</span>
@@ -1302,6 +1308,25 @@ async function fetchCensorTop() {
   } catch(e) { console.error('censorTop', e); }
 }
 
+async function fetchBudget() {
+  try {
+    const r = await fetch('/api/budget');
+    if (!r.ok) { $id('budget-inner').textContent = '— offline —'; return; }
+    const d = await r.json();
+    const provs = d.providers || {};
+    const parts = Object.keys(provs).sort().map(p => {
+      const x = provs[p];
+      const c = x.status==='red'?'#f85149':x.status==='yellow'?'#e3b341':'#3fb950';
+      const lim = x.limit_usd ? `/$${x.limit_usd}` : '';
+      const pct = x.limit_usd ? ` ${x.pct}%` : '';
+      return `<span style="margin-right:14px;color:${c}"><b>${p}</b> $${x.used_usd.toFixed(2)}${lim}${pct}</span>`;
+    });
+    const saved = Number(d.lazy_saved_month_usd || 0).toFixed(4);
+    parts.push(`<span style="color:#22c55e;font-weight:700">lazy saved $${saved}</span>`);
+    $id('budget-inner').innerHTML = parts.join('') || '<span style="color:#484f58">no data</span>';
+  } catch(e) { console.error('budget', e); $id('budget-inner').textContent = '— error —'; }
+}
+
 async function fetchLazyQueue() {
   try {
     const r = await fetch('/api/queue/lazy?limit=5');
@@ -1423,6 +1448,7 @@ fetchDecisions();
 loadSavings();
 fetchCensorTop();
 fetchLazyQueue();
+fetchBudget();
 setInterval(fetchSigs,      3000);
 setInterval(fetchNodes,    30000);
 setInterval(fetchRouting,  60000);
@@ -1430,6 +1456,7 @@ setInterval(fetchDecisions, 5000);
 setInterval(loadSavings,   60000);
 setInterval(fetchCensorTop, 300000);
 setInterval(fetchLazyQueue,  10000);
+setInterval(fetchBudget,   120000);
 </script>
 </body>
 </html>
