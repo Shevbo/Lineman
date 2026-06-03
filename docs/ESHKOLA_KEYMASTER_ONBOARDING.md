@@ -170,6 +170,83 @@ ssh hoster 'pm2 logs eshkola --lines 30 --nostream'
 - [ ] Тест ротации (Боря инициирует один раз): Боря шлёт «прими секрет: ESHKOLA_DEEPSEEK=новое»; в течение 30s `klod_keymaster.get()` начинает возвращать новое значение **без рестарта твоего процесса**.
 - [ ] Приложение не падает после рестарта pm2 (значит секреты подтягиваются из Keymaster, а не из мёртвого .env).
 
+## Бесплатный OCR и vision — LM Studio (hyperv)
+
+В федерации есть **локальный GPU-сервер** (hyperv, Windows) с несколькими мультимодальными моделями. Использование бесплатно, без ключей.
+
+### Доступ к LM Studio
+
+| Откуда | URL | Способ |
+|--------|-----|--------|
+| vibe (Windows, ты) | `http://192.168.1.70:1234` | прямой LAN (быстрее) |
+| smain, hoster, любой WG-узел | `http://10.66.0.1:9090/proxy/lm-studio` | через Lineman |
+
+Секрет `CCR_LMSTUDIO_URL` в Keymaster содержит прямой адрес (`http://192.168.1.70:1234`). Запрашивать не нужно — адрес фиксирован.
+
+**Доступные модели:**
+
+| model | Задачи | Скорость |
+|-------|--------|---------|
+| `gemma-4-e4b-it` | OCR, распознавание картинок, описание | 3-20 сек |
+| `gemma-4-26b-a4b-it-imatrix` | Суммаризация, длинный контекст | 20-60 сек |
+| `deepseek-r1-distill-qwen-14b` | Рассуждения, сложные задачи | 30-120 сек |
+
+Если LM Studio недоступен (hyperv выключен) — Lazy Queue автоматически фолбэкнет на Ollama@hoster или DeepSeek-flash.
+
+### OCR страницы учебника (прямой вызов с vibe)
+
+```python
+import urllib.request, json, base64
+
+def ocr_page(img_path: str, lm_studio="http://192.168.1.70:1234") -> str:
+    b64 = base64.b64encode(open(img_path, "rb").read()).decode()
+    body = {
+        "model": "gemma-4-e4b-it",
+        "messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+            {"type": "text", "text": "Extract all text from this image exactly as written."},
+        ]}],
+        "max_tokens": 2000,
+        "stream": False,
+    }
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    req = urllib.request.Request(
+        f"{lm_studio}/v1/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "Authorization": "Bearer local"},
+    )
+    with opener.open(req, timeout=120) as r:
+        return json.loads(r.read())["choices"][0]["message"]["content"]
+```
+
+### Batch-OCR 12 учебников через Lazy Queue (рекомендовано)
+
+4 параллельных воркера на smain = 4 страницы одновременно. OCR по SSH:
+
+```bash
+# Запустить batch-OCR на smain:
+ssh smain "cd /home/shectory/workspaces/infra/lineman && \
+  .venv/bin/python3 scripts/ocr_batch.py \
+  --pdf /путь/к/учебник1.pdf /путь/к/учебник2.pdf \
+  --agent eshkola@vibe \
+  --out /tmp/ocr_results.json \
+  --workers 4 \
+  --dpi 150"
+```
+
+Результат: JSON с текстом каждой страницы. Поддерживает PDF и директории с PNG/JPG.
+
+### Отправить Клод-Доступу вопрос о инфраструктуре
+
+```bash
+curl -s -X POST "http://127.0.0.1:19090/api/agent/klod-access/message?from=eshkola&node=vibe" \
+     -d "Сообщение"
+```
+
+Клод-Доступ прочитает в начале следующей сессии и ответит.
+
+---
+
 ## Контакты
 
 - Когда тебе непонятно или что-то сломалось — пиши мне (Клод-Доступ) через `klod_client.complain("eshkola", "сообщение")`. Я увижу твоё сообщение в начале своей сессии вместе с автоматическим triage твоих ошибок из `request_log`.

@@ -86,22 +86,59 @@ print(r["choices"][0]["message"]["content"])
 Что важно:
 - `gemma-4-e4b-it` (НЕ `google/gemma-4-e4b`) — точный identifier модели в LM Studio.
 - Поддерживается: `image/jpeg`, `image/png`, `image/webp`, base64 data URLs.
-- Latency на CPU: 3-20 секунд за картинку. Для **batch'а** используй Lazy Queue с `kind="vision"` / `"ocr"` / `"caption"` / `"describe"` — поставится в очередь, worker сам обработает.
+- Latency: 3-20 секунд за картинку (GPU на hyperv). Для **batch'а** используй Lazy Queue с `kind="vision"` / `"ocr"` / `"caption"` / `"describe"` — поставится в очередь, worker сам обработает.
 - Качество: уровень Gemini-flash для типичных задач (описание, OCR, классификация). Для precision-критичных задач (медицина/документы строгой формы) — всё равно Gemini Pro.
 
 ### Через Lazy Queue (когда не срочно)
 
+`user_prompt` должен быть **JSON-массивом** vision-частей (OpenAI format):
+
 ```python
+import json, base64
 from lazy_client import submit_and_wait
+
+img_b64 = base64.b64encode(open("photo.jpg", "rb").read()).decode()
+vision_parts = [
+    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+    {"type": "text", "text": "Одной фразой что на фото"},
+]
 caption = submit_and_wait(
     kind="caption",
-    prompt='{"img_b64":"...", "ask":"одной фразой что на фото"}',
+    prompt=json.dumps(vision_parts),   # ← JSON-массив, НЕ строка и не dict
     from_agent="<твой_id>@<node>",
     max_tokens=80, timeout=180,
 )
 ```
 
-Worker сам распакует JSON, отдаст gemma vision-API, вернёт текст. **Стоимость: $0.**
+Worker отдаст в gemma vision-API, вернёт текст. **Стоимость: $0.**
+
+### Batch-OCR нескольких PDF или директории картинок
+
+На smain есть готовый скрипт `scripts/ocr_batch.py`:
+
+```bash
+# По SSH с любого узла федерации:
+ssh smain "cd /home/shectory/workspaces/infra/lineman && \
+  .venv/bin/python3 scripts/ocr_batch.py \
+  --pdf /path/to/book.pdf \
+  --agent <твой_id>@<node> \
+  --out /tmp/ocr_result.json \
+  --workers 4"
+# → JSON: {"pages":[{"label":"book.pdf:p1","text":"..."},...],"stats":{...}}
+```
+
+Скрипт конвертирует PDF → PNG (PyMuPDF), параллельно отправляет страницы в Lazy Queue `kind=ocr`, дожидается результатов. 4 воркера = 4 параллельных запроса к LM Studio.
+
+### С vibe (Windows) — прямой LAN-доступ
+
+С vibe LM Studio достижим **без туннеля** по прямому LAN-адресу:
+
+```python
+LM_STUDIO = "http://192.168.1.70:1234"   # CCR_LMSTUDIO_URL из keymaster
+# Вместо http://10.66.0.1:9090/proxy/lm-studio/...
+```
+
+Это быстрее (~2× меньше latency). Используй `LM_STUDIO + "/v1/chat/completions"` напрямую. Для batch OCR с vibe — запускай ocr_batch.py на smain через SSH (там воркеры).
 
 ### Рецепт для ЭШколы
 
