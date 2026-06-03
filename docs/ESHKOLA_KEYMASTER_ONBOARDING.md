@@ -176,12 +176,13 @@ ssh hoster 'pm2 logs eshkola --lines 30 --nostream'
 
 ### Доступ к LM Studio
 
-Единый подход: все агенты идут через Lineman. Lineman сам роутит запрос через SSH-туннель smain→Pi→hyperv. Прямой адрес hyperv (`192.168.1.70:1234`) — деталь реализации Lineman, агентам не нужен.
+ЭШкола чаще всего работает с vibe или sdev — оба являются VM под HyperV в домашней LAN Бориса (`192.168.1.x`). LM Studio (`192.168.1.70:1234`) в той же подсети: прямой LAN-доступ, без WG и туннелей.
 
-| Откуда | URL |
-|--------|-----|
-| vibe (Windows, ты) | `http://127.0.0.1:19090/proxy/lm-studio/v1/chat/completions` |
-| smain, hoster, любой WG-узел | `http://10.66.0.1:9090/proxy/lm-studio/v1/chat/completions` |
+| Откуда | URL | Примечание |
+|--------|-----|-----------|
+| **vibe, sdev, VS Code Claude** | `http://192.168.1.70:1234/v1/...` | прямой LAN — быстро, без крюков |
+| smain | `http://127.0.0.1:9090/proxy/lm-studio/v1/...` | через Lineman (туннель через Pi) |
+| hoster, cloud | `http://10.66.0.1:9090/proxy/lm-studio/v1/...` | через Lineman по WG |
 
 **Доступные модели:**
 

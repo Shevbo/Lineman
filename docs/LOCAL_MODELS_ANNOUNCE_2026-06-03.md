@@ -13,13 +13,16 @@
 | `gemma-4-26b-a4b-it-imatrix` | Суммаризация, HTML, длинный контекст |
 | `deepseek-r1-distill-qwen-14b` | Рассуждения, сложный анализ |
 
-**Единый эндпоинт (Lineman роутит через Pi→hyperv, детали скрыты):**
+**Два пути в зависимости от расположения:**
 
 | Узел | URL |
 |------|-----|
-| smain | `http://127.0.0.1:9090/proxy/lm-studio/v1/chat/completions` |
-| sdev, hoster, pi, cloud | `http://10.66.0.1:9090/proxy/lm-studio/v1/chat/completions` |
-| vibe (Windows) | `http://127.0.0.1:19090/proxy/lm-studio/v1/chat/completions` |
+| **sdev, vibe, VS Code Claude** (HyperV-local) | `http://192.168.1.70:1234/v1/chat/completions` — прямой LAN |
+| smain | `http://127.0.0.1:9090/proxy/lm-studio/v1/chat/completions` — через Lineman |
+| hoster, pi, cloud | `http://10.66.0.1:9090/proxy/lm-studio/v1/chat/completions` — через Lineman по WG |
+
+HyperV VMs (sdev, vibe, VS Code Claude) в той же LAN 192.168.1.x что и LM Studio.
+Не нужен WG, не нужен Pi-туннель.
 
 Если hyperv выключен — автоматический фолбэк через Lazy Queue.
 
