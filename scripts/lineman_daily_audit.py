@@ -182,6 +182,45 @@ def _lazy_queue_audit() -> dict:
     return out
 
 
+def _oauth_secrets_audit() -> dict:
+    """Сводка по OAuth-секретам Ключника: список секретов с TTL+статусом.
+
+    Использует /keymaster/manifest, фильтрует по наличию oauth-блока.
+    Возвращает {total, healthy, expiring_24h, expired, items[]}.
+    """
+    import time as _t
+    out: dict = {"total": 0, "healthy": 0, "expiring_24h": 0, "expired": 0, "items": []}
+    try:
+        with urllib.request.urlopen(KEYMASTER_MANIFEST_URL, timeout=4) as r:
+            m = json.loads(r.read())
+    except Exception as e:
+        out["error"] = str(e)
+        return out
+    now = _t.time()
+    for name, info in (m.get("secrets") or {}).items():
+        if not isinstance(info.get("oauth"), dict):
+            continue
+        out["total"] += 1
+        oauth = info["oauth"]
+        expires_at = float(oauth.get("expires_at") or 0)
+        ttl = expires_at - now if expires_at else None
+        if ttl is None:
+            status = "?"
+        elif ttl < 0:
+            status = "expired"; out["expired"] += 1
+        elif ttl < 86400:
+            status = "expiring_24h"; out["expiring_24h"] += 1
+        else:
+            status = "healthy"; out["healthy"] += 1
+        out["items"].append({
+            "name": name,
+            "ttl_hours": round(ttl / 3600, 1) if ttl is not None else None,
+            "status": status,
+            "refresh_url": oauth.get("refresh_url", ""),
+        })
+    return out
+
+
 def _check_egress_drift() -> list[str]:
     """Verify forward-proxy egress matches expected per-proxy IPs. Returns drift list."""
     drifts = []
@@ -214,6 +253,7 @@ def main() -> int:
     gem_ok, gem_models = _gemini_keepalive()
     egress_drifts = _check_egress_drift()
     km = _keymaster_audit()
+    oauth_audit = _oauth_secrets_audit()
     lq = _lazy_queue_audit()
 
     con = sqlite3.connect(DB)
@@ -371,6 +411,23 @@ def main() -> int:
         f"- без used_by: {len(km.get('no_used_by') or [])}",
         f"- не ротировались > 90 дней: {len(km.get('old_rotated') or [])}",
     ]
+
+    if oauth_audit.get("total", 0) > 0:
+        lines += [
+            "", "## OAuth-секреты (self-refresh)",
+            f"- всего: {oauth_audit['total']}",
+            f"- healthy: {oauth_audit['healthy']}, "
+            f"expiring_24h: {oauth_audit['expiring_24h']}, "
+            f"expired: {oauth_audit['expired']}",
+        ]
+        for it in oauth_audit.get("items", []):
+            ttl = it.get("ttl_hours")
+            ttl_str = f"{ttl}h" if ttl is not None else "?"
+            lines.append(f"  - {it['name']:25s} ttl={ttl_str:8s} status={it['status']}")
+        if oauth_audit.get("expired", 0) > 0:
+            actions.append(f"P0: {oauth_audit['expired']} OAuth-секрет(ов) истёкли — proactive refresh не сработал, нужен manual re-auth.")
+        if oauth_audit.get("expiring_24h", 0) > 0:
+            actions.append(f"P1: {oauth_audit['expiring_24h']} OAuth-секрет(ов) истекают в течение 24h.")
 
     lines += [
         "", "## Lazy Queue (24h)",

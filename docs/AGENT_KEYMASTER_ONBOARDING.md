@@ -159,7 +159,13 @@ requests.post(
 
 `proxies=...` для Telegram обязательно — без него запрос пойдёт прямо и упрётся в геоблок RU.
 
-## 5.5 OAuth-токены (hh.ru, Polar, Google OAuth, Claude OAuth)
+## 5.5 OAuth-токены (hh.ru, Google OAuth, Claude OAuth)
+
+**Не для Polar**: Polar Accesslink API использует access-токен который **не истекает** автоматически (см. polar.com/accesslink-api docs «The access token does not expire automatically»). Если меняется только при revoke. Polar НЕ нуждается в self-refresh.
+
+**Не для Claude (Anthropic) OAuth**: имеет специфичный refresh-flow через Claude CLI. Используется `claude_token_refresh.sh` (cron каждые 6 часов) отдельно.
+
+Для всех остальных провайдеров (hh.ru, Google OAuth client, любой generic OAuth2 RFC6749):
 
 Если твой провайдер использует OAuth (refresh-token grant flow) — НЕ обновляй access_token руками и НЕ клади его в Ключник. Стандарт OAuth Self-Refresh: Keymaster сам обновляет токен перед каждой выдачей.
 
