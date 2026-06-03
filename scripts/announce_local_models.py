@@ -35,14 +35,19 @@ ANNOUNCE_TEXT = f"""# Обновление: локальные модели LM S
 
 ### LM Studio — три модели, бесплатно
 
-| Модель | Задачи | URL |
-|--------|--------|-----|
-| `gemma-4-e4b-it` | OCR, vision, распознавание картинок | `/proxy/lm-studio/v1/chat/completions` |
-| `gemma-4-26b-a4b-it-imatrix` | Суммаризация, HTML, длинный контекст | то же |
-| `deepseek-r1-distill-qwen-14b` | Рассуждения, сложный анализ | то же |
+| Модель | Задачи |
+|--------|--------|
+| `gemma-4-e4b-it` | OCR, vision, распознавание картинок |
+| `gemma-4-26b-a4b-it-imatrix` | Суммаризация, HTML, длинный контекст |
+| `deepseek-r1-distill-qwen-14b` | Рассуждения, сложный анализ |
 
-URL через Lineman (все узлы WG): `http://10.66.0.1:9090/proxy/lm-studio/v1/chat/completions`
-URL с vibe (прямой LAN): `http://192.168.1.70:1234/v1/chat/completions`
+**Единый эндпоинт (Lineman роутит через Pi→hyperv, детали скрыты):**
+
+| Узел | URL |
+|------|-----|
+| smain | `http://127.0.0.1:9090/proxy/lm-studio/v1/chat/completions` |
+| sdev, hoster, pi, cloud | `http://10.66.0.1:9090/proxy/lm-studio/v1/chat/completions` |
+| vibe (Windows) | `http://127.0.0.1:19090/proxy/lm-studio/v1/chat/completions` |
 
 Если hyperv выключен — автоматический фолбэк через Lazy Queue.
 

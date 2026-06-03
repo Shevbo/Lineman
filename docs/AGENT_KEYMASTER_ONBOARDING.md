@@ -129,16 +129,16 @@ ssh smain "cd /home/shectory/workspaces/infra/lineman && \
 
 Скрипт конвертирует PDF → PNG (PyMuPDF), параллельно отправляет страницы в Lazy Queue `kind=ocr`, дожидается результатов. 4 воркера = 4 параллельных запроса к LM Studio.
 
-### С vibe (Windows) — прямой LAN-доступ
+### С vibe (Windows)
 
-С vibe LM Studio достижим **без туннеля** по прямому LAN-адресу:
+Используй тот же эндпоинт, но через reverse tunnel к Lineman:
 
 ```python
-LM_STUDIO = "http://192.168.1.70:1234"   # CCR_LMSTUDIO_URL из keymaster
-# Вместо http://10.66.0.1:9090/proxy/lm-studio/...
+# vibe: http://127.0.0.1:19090/proxy/lm-studio/v1/chat/completions
+# Lineman сам роутит smain:1234 → Pi(WG) → hyperv:1234
 ```
 
-Это быстрее (~2× меньше latency). Используй `LM_STUDIO + "/v1/chat/completions"` напрямую. Для batch OCR с vibe — запускай ocr_batch.py на smain через SSH (там воркеры).
+Для batch OCR с vibe — запускай `ocr_batch.py` на smain через SSH (там воркеры).
 
 ### Рецепт для ЭШколы
 

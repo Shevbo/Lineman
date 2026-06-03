@@ -176,12 +176,12 @@ ssh hoster 'pm2 logs eshkola --lines 30 --nostream'
 
 ### Доступ к LM Studio
 
-| Откуда | URL | Способ |
-|--------|-----|--------|
-| vibe (Windows, ты) | `http://192.168.1.70:1234` | прямой LAN (быстрее) |
-| smain, hoster, любой WG-узел | `http://10.66.0.1:9090/proxy/lm-studio` | через Lineman |
+Единый подход: все агенты идут через Lineman. Lineman сам роутит запрос через SSH-туннель smain→Pi→hyperv. Прямой адрес hyperv (`192.168.1.70:1234`) — деталь реализации Lineman, агентам не нужен.
 
-Секрет `CCR_LMSTUDIO_URL` в Keymaster содержит прямой адрес (`http://192.168.1.70:1234`). Запрашивать не нужно — адрес фиксирован.
+| Откуда | URL |
+|--------|-----|
+| vibe (Windows, ты) | `http://127.0.0.1:19090/proxy/lm-studio/v1/chat/completions` |
+| smain, hoster, любой WG-узел | `http://10.66.0.1:9090/proxy/lm-studio/v1/chat/completions` |
 
 **Доступные модели:**
 
