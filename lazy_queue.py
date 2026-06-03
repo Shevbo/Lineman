@@ -114,8 +114,11 @@ def compute_saved_usd(backend: str, kind: str, tokens_in: int, tokens_out: int) 
 # ────────────────────────────── DB helpers ──────────────────────────────
 
 def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(str(DB_PATH), isolation_level=None)
+    c = sqlite3.connect(str(DB_PATH), isolation_level=None, timeout=10,
+                        check_same_thread=False)
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA busy_timeout=8000")
     return c
 
 
@@ -284,13 +287,28 @@ _NOPROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 def call_backend(backend: str, model: str, system: str, user: str,
                  max_tokens: int, temperature: float, agent: str = "lazy-worker"
                  ) -> tuple[str, int, int, int]:
-    """Возвращает (content, tokens_in, tokens_out, latency_ms). Raise on error."""
+    """Возвращает (content, tokens_in, tokens_out, latency_ms). Raise on error.
+
+    user может быть обычной строкой ИЛИ JSON-массивом vision-частей:
+    '[{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}},
+      {"type":"text","text":"OCR this page"}]'
+    В vision-случае content передаётся как список объектов (OpenAI vision format).
+    """
     url = f"{LINEMAN}/proxy/{backend}/v1/chat/completions"
+    # Detect vision content: JSON array starting with '['
+    user_content: Any
+    if user.lstrip().startswith("["):
+        try:
+            user_content = json.loads(user)
+        except Exception:
+            user_content = user
+    else:
+        user_content = user
     body = {
         "model": model,
         "messages": [
             *([{"role": "system", "content": system}] if system else []),
-            {"role": "user", "content": user},
+            {"role": "user", "content": user_content},
         ],
         "max_tokens": max_tokens,
         "temperature": temperature,

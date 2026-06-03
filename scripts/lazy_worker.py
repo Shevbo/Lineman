@@ -2,26 +2,34 @@
 """lazy_worker — long-running PM2 процесс, обрабатывает Lazy Queue.
 
 Алгоритм:
-1. `claim_next()` атомарно берёт следующий job (status=queued, priority asc, id asc).
-2. Если нет — sleep IDLE_SLEEP_S и далее.
-3. Иначе: route_for_kind(job.kind) → пройти fallback chain.
-4. На успехе `complete_job`. На полном фейле `fail_job` (retries++, max 3 → status=failed).
+1. N воркер-потоков (LAZY_WORKERS, по умолчанию 4) конкурентно тянут задачи.
+2. Каждый: claim_next() (BEGIN IMMEDIATE — атомарно) → process() → complete/fail.
+3. Idle: sleep LAZY_IDLE_SLEEP_S (по умолчанию 3s) и снова poll.
+
+Параллельность насыщает GPU LM Studio: пока один job ждёт токены — другие уже идут.
 
 Запуск как PM2:
     npx pm2 start /home/shectory/workspaces/infra/lineman/scripts/lazy_worker.py \
         --name lazy-worker --interpreter /home/shectory/workspaces/infra/lineman/.venv/bin/python3
+
+Env vars:
+    LAZY_WORKERS=4          — кол-во параллельных потоков (рекомендовано 4 для GPU)
+    LAZY_IDLE_SLEEP_S=3     — пауза при пустой очереди (в секундах)
 """
 from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 THIS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(THIS))
 import lazy_queue as lq  # noqa: E402
 
-IDLE_SLEEP_S = float(os.environ.get("LAZY_IDLE_SLEEP_S", "5"))
+IDLE_SLEEP_S = float(os.environ.get("LAZY_IDLE_SLEEP_S", "3"))
+N_WORKERS = int(os.environ.get("LAZY_WORKERS", "4"))
 
 
 def process(job: dict) -> None:
@@ -126,30 +134,47 @@ def process_split(job: dict) -> None:
     lq.fail_job(job["id"], last_err, int(job.get("retries") or 0))
 
 
-def main() -> int:
-    print(f"[lazy-worker] starting, idle-sleep={IDLE_SLEEP_S}s")
+def worker_loop(wid: int) -> None:
+    """Один поток — бесконечный цикл claim→process."""
+    label = f"lazy-worker-{wid}"
     while True:
         try:
             job = lq.claim_next()
         except Exception as e:
-            print(f"[lazy-worker] claim error: {e}", file=sys.stderr)
+            print(f"[{label}] claim error: {e}", file=sys.stderr)
             time.sleep(IDLE_SLEEP_S)
             continue
         if not job:
             time.sleep(IDLE_SLEEP_S)
             continue
-        # дедлайн просрочен — отметить и пропустить
         if job.get("deadline_ts") and time.time() > float(job["deadline_ts"]):
             lq.complete_job(
                 job["id"], output="[expired before worker reached it]",
                 model="-", backend="-", tokens_in=0, tokens_out=0, latency_ms=0,
             )
-            print(f"[lazy] id={job['id']} expired")
+            print(f"[{label}] id={job['id']} expired")
             continue
         try:
             process(job)
         except Exception as e:
-            lq.fail_job(job["id"], f"worker exc: {type(e).__name__}: {e}", int(job.get("retries") or 0))
+            lq.fail_job(job["id"], f"worker exc: {type(e).__name__}: {e}",
+                        int(job.get("retries") or 0))
+
+
+def main() -> int:
+    print(f"[lazy-worker] starting {N_WORKERS} workers, idle-sleep={IDLE_SLEEP_S}s")
+    if N_WORKERS == 1:
+        worker_loop(0)
+        return 0
+    # Запускаем N потоков, главный поток ждёт (они бесконечные, join — навсегда).
+    threads = []
+    for i in range(N_WORKERS):
+        t = threading.Thread(target=worker_loop, args=(i,), daemon=True, name=f"lazy-{i}")
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join()
+    return 0
 
 
 if __name__ == "__main__":

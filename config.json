@@ -263,11 +263,36 @@
         "ctx_k": 8,
         "note": "LM Studio hyperv"
       },
-      "claude-opus-4-7":  { "in": 15.0, "out": 75.0, "ctx_k": 200, "note": "Anthropic Opus" },
-      "claude-opus-4-8":  { "in": 15.0, "out": 75.0, "ctx_k": 200, "note": "Anthropic Opus" },
-      "claude-sonnet-4-6":{ "in": 3.0,  "out": 15.0, "ctx_k": 200, "note": "Anthropic Sonnet" },
-      "claude-sonnet-4-7":{ "in": 3.0,  "out": 15.0, "ctx_k": 200, "note": "Anthropic Sonnet" },
-      "claude-haiku-4-5-20251001": { "in": 0.8, "out": 4.0, "ctx_k": 200, "note": "Anthropic Haiku" }
+      "claude-opus-4-7": {
+        "in": 15.0,
+        "out": 75.0,
+        "ctx_k": 200,
+        "note": "Anthropic Opus"
+      },
+      "claude-opus-4-8": {
+        "in": 15.0,
+        "out": 75.0,
+        "ctx_k": 200,
+        "note": "Anthropic Opus"
+      },
+      "claude-sonnet-4-6": {
+        "in": 3.0,
+        "out": 15.0,
+        "ctx_k": 200,
+        "note": "Anthropic Sonnet"
+      },
+      "claude-sonnet-4-7": {
+        "in": 3.0,
+        "out": 15.0,
+        "ctx_k": 200,
+        "note": "Anthropic Sonnet"
+      },
+      "claude-haiku-4-5-20251001": {
+        "in": 0.8,
+        "out": 4.0,
+        "ctx_k": 200,
+        "note": "Anthropic Haiku"
+      }
     }
   },
   "dedup_cache": {
@@ -309,7 +334,8 @@
         "resume-editor",
         "interview-coach",
         "inbox",
-        "klod-access"
+        "klod-access",
+        "eshkola"
       ]
     }
   },
@@ -367,7 +393,9 @@
       "pi": [],
       "pi2": []
     },
-    "decommissioned": ["cloud"]
+    "decommissioned": [
+      "cloud"
+    ]
   },
   "proxy_pool": {
     "proxies": [
