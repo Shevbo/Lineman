@@ -183,8 +183,27 @@ def write_outbox(to_agent: str, message: str, in_reply_to: int | None = None,
     return rec
 
 
-def read_outbox(since: int = 0, limit: int = 50) -> list[dict[str, Any]]:
-    return _tail_jsonl(OUTBOX_FILE, since, limit)
+def read_outbox(since: int = 0, limit: int = 50, to: str | None = None) -> list[dict[str, Any]]:
+    """Pull-модель reply-доставки: агент тянет свои ответы через to=<его id> + курсор since.
+    Без to — весь outbox (как раньше)."""
+    if not OUTBOX_FILE.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    with OUTBOX_FILE.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if d.get("id", 0) <= since:
+                continue
+            if to is not None and d.get("to") != to:
+                continue
+            out.append(d)
+    return out[-limit:]
 
 
 async def deliver_reply(to_agent: str, message: str,

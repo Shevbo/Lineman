@@ -823,14 +823,24 @@ class ProxyServer:
                         pass
                 if not msg:
                     return self._send_simple_and_close(wr, 400, {"error": "empty message"})
-                ok, err = await klod_inbox.deliver_reply(to_agent, msg, self._upstream_session)
-                rec = klod_inbox.write_outbox(to_agent, msg, in_reply_to, ok, err)
-                return self._send_simple_and_close(wr, 200, {"status": "ok", "id": rec["id"], "delivered": ok, "error": err})
+                # Записываем в outbox СРАЗУ (всегда доступно для pull), даже если push
+                # не доходит (агент не openclaw-dispatchable: 404/timeout). Push —
+                # best-effort в фоне, не блокирует ответ.
+                rec = klod_inbox.write_outbox(to_agent, msg, in_reply_to, delivered=None)
+                try:
+                    asyncio.create_task(klod_inbox.deliver_reply(to_agent, msg))
+                except Exception:
+                    pass
+                return self._send_simple_and_close(wr, 200, {
+                    "status": "ok", "id": rec["id"],
+                    "pull": f"/api/agent/klod-access/outbox?to={to_agent}&since=<cursor>",
+                })
 
             if method == "GET" and suffix == "outbox":
                 since = int(q("since", "0") or "0")
                 limit = min(int(q("limit", "50") or "50"), 500)
-                msgs = klod_inbox.read_outbox(since, limit)
+                to = q("to") or None
+                msgs = klod_inbox.read_outbox(since, limit, to=to)
                 return self._send_simple_and_close(wr, 200, {"messages": msgs})
 
             self._send_simple_and_close(wr, 404, {"error": "unknown klod-access route"})
