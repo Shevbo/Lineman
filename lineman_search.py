@@ -10,6 +10,8 @@ from html import unescape
 
 import aiohttp
 
+_YT_ID = re.compile(r"[?&]v=([\w-]{6,})|youtu\.be/([\w-]{6,})")
+
 _LINK = re.compile(r'<a[^>]+href="([^"]+)"[^>]*class=[\'"]result-link[\'"][^>]*>(.*?)</a>', re.S)
 _SNIP = re.compile(r"<td[^>]*class=['\"]result-snippet['\"][^>]*>(.*?)</td>", re.S)
 _TAG = re.compile(r"<[^>]+>")
@@ -47,4 +49,24 @@ async def web_search(query: str, proxy: str | None = None,
             "url": url,
             "snippet": snips[i] if i < len(snips) else "",
         })
+    return out
+
+
+async def youtube_search(query: str, proxy: str | None = None,
+                         limit: int = 6, timeout: int = 20) -> list[dict]:
+    """Поиск роликов на YouTube — через DDG site:youtube.com (прямой скрап YouTube
+    блокируется). Возвращает [{title, url, videoId, snippet}]."""
+    raw = await web_search(f"site:youtube.com {query}", proxy=proxy,
+                           limit=limit * 3, timeout=timeout)
+    out: list[dict] = []
+    for r in raw:
+        url = r.get("url", "")
+        if "youtube.com/watch" not in url and "youtu.be/" not in url:
+            continue
+        m = _YT_ID.search(url)
+        vid = (m.group(1) or m.group(2)) if m else ""
+        r["videoId"] = vid
+        out.append(r)
+        if len(out) >= limit:
+            break
     return out

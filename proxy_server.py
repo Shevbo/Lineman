@@ -375,8 +375,8 @@ class ProxyServer:
                 # /api/klod-chat доступен через домен dashboard.shectory.ru (nginx
                 # уже проксирует /api/ → Lineman), без правки nginx.
                 await self._raw_dashboard(rd, wr, "klod-chat.html")
-            elif request_path_only == "/api/search" and method == "GET":
-                # Федеративный web_search (keyless, egress Lineman → iProyal).
+            elif request_path_only in ("/api/search", "/api/youtube") and method == "GET":
+                # Федеративный web_search / youtube-поиск (keyless, egress Lineman).
                 await self._raw_api_search(rd, wr, request_path)
                 return
 
@@ -1784,11 +1784,17 @@ class ProxyServer:
             limit = 6
         if not query:
             return self._send_simple_and_close(wr, 400, {"error": "missing q"})
+        is_youtube = "/api/youtube" in (url.path or "")
         try:
-            results = await lineman_search.web_search(
-                query, proxy="http://127.0.0.1:9090", limit=limit)
+            if is_youtube:
+                results = await lineman_search.youtube_search(
+                    query, proxy="http://127.0.0.1:9090", limit=limit)
+            else:
+                results = await lineman_search.web_search(
+                    query, proxy="http://127.0.0.1:9090", limit=limit)
             self._send_simple_and_close(
-                wr, 200, {"query": query, "count": len(results), "results": results})
+                wr, 200, {"query": query, "kind": "youtube" if is_youtube else "web",
+                          "count": len(results), "results": results})
         except Exception as e:
             logger.exception("web_search_failed")
             self._send_simple_and_close(wr, 502, {"error": str(e)[:200]})
