@@ -59,24 +59,21 @@ REMOTE_SSH_CONFIG = {
             "inbox": "inbox",
         }
     },
-    "vibe": { # vibe is boris@10.66.0.6 (Windows)
+    "vibe": { # vibe = boris's Windows PC. WG (10.66.0.6) is chronically down →
+              # reach it via the Pi relay (LAN 192.168.1.64, ProxyJump shevbo-pi).
         "user": "boris",
-        "host_ip": "10.66.0.6",
+        "host_ip": "192.168.1.64",          # vibe LAN IP, reached through the Pi jump host
+        "proxy_jump": "shevbo-pi",          # WG to 10.66.0.6 is dead; Pi relay is the reliable path
         "key_path": "~/.ssh/id_ed25519", # Assumes this key is authorized on vibe
         # Windows: prevent Node.js from routing localhost requests through iProyal system proxy
         "cmd_prefix": 'set "NO_PROXY=localhost,127.0.0.1,::1" && ',
         "agent_map": {
             "virtual-boris-vibe": "vboris2", # VBoris2 on vibe is agent 'vboris2'
-        }
+        },
+        # Reserve path — re-enable as failover once WireGuard on vibe is restored:
+        "fallback_host_ip": "10.66.0.6",
     },
-    "cloud": { # cloud is shevbo@10.66.0.3 (shevbo-cloud) — stable VPS, usually online
-        "user": "shevbo",
-        "host_ip": "10.66.0.3",
-        "key_path": "~/.ssh/id_ed25519",
-        "agent_map": {
-            "tank-3": "main", # Tank 3 on cloud is agent 'main'
-        }
-    },
+    # cloud (shevbo@10.66.0.3) СПИСАН 2026-06-04 — узла нет, агента tank-3 нет.
     "keymaster": { # Keymaster API service is local on smain
         "user": "shectory", # dummy
         "host_ip": "127.0.0.1",
@@ -702,9 +699,10 @@ class ProxyServer:
             try:
                 escaped_msg = message_text.replace('"', '\\"')
                 cmd_prefix = ssh_cfg.get("cmd_prefix", "")
-                ssh_cmd = [
-                    "ssh",
-                    "-o", "ConnectTimeout=15",
+                ssh_cmd = ["ssh", "-o", "ConnectTimeout=15"]
+                if ssh_cfg.get("proxy_jump"):
+                    ssh_cmd += ["-J", ssh_cfg["proxy_jump"]]
+                ssh_cmd += [
                     "-i", os.path.expanduser(ssh_cfg["key_path"]),
                     f"{ssh_cfg['user']}@{ssh_cfg['host_ip']}",
                     f'{cmd_prefix}openclaw agent --agent {remote_agent_id} --message "{escaped_msg}" --json'
@@ -1513,7 +1511,7 @@ class ProxyServer:
 
         # All other WG nodes in canonical order
         from db import WG_HOST_MAP
-        WG_ORDER = ["pi2", "pi", "vibe", "smain", "cloud", "sdev", "hoster"]
+        WG_ORDER = ["pi2", "pi", "vibe", "smain", "sdev", "hoster"]
         known = {name for name in WG_HOST_MAP.values()}
         decommissioned = set(fed_cfg.get("decommissioned", []))
 
