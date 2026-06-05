@@ -68,6 +68,30 @@ def ask(agent_id: str, question: str, *, node: str = "smain") -> dict[str, Any]:
                  {"from": agent_id, "node": node})
 
 
+def _get(path: str, params: dict[str, str]) -> dict[str, Any]:
+    from urllib.parse import urlencode
+    url = f"{LINEMAN_URL}{path}?{urlencode(params)}"
+    try:
+        with urllib.request.urlopen(url, timeout=TIMEOUT_S) as r:
+            return json.loads(r.read())
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def get_replies(agent_id: str, *, since: int = 0, limit: int = 50) -> list[dict[str, Any]]:
+    """Забрать ответы Klod-Access, адресованные тебе (pull-модель reply-доставки).
+
+    Поллить периодически с курсором since = id последнего обработанного ответа.
+    Возвращает список outbox-записей {id, ts, to, in_reply_to, message}.
+    Пример:
+        for rep in get_replies("eshkola", since=my_cursor):
+            handle(rep["message"]); my_cursor = rep["id"]
+    """
+    d = _get("/api/agent/klod-access/outbox",
+             {"to": agent_id, "since": str(since), "limit": str(limit)})
+    return d.get("messages", []) if isinstance(d, dict) else []
+
+
 # Async helpers (если у вас asyncio loop)
 async def async_complain(agent_id: str, message: str, *, node: str = "smain") -> dict[str, Any]:
     import asyncio
