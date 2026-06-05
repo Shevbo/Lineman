@@ -378,6 +378,9 @@ class ProxyServer:
             elif request_path_only in ("/api/search", "/api/youtube") and method == "GET":
                 # Федеративный web_search / youtube-поиск (keyless, egress Lineman).
                 await self._raw_api_search(rd, wr, request_path)
+            elif request_path_only == "/api/build" and method == "POST":
+                # Постановка тикета Билдеру (klod-builder очередь).
+                await self._raw_api_build(rd, wr, request_path)
                 return
 
             # Reverse proxy: /proxy/{provider}/... — plaintext body inspection
@@ -1758,6 +1761,62 @@ class ProxyServer:
         )
         await wr.drain()
         wr.close()
+
+    async def _raw_api_build(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        request_path: str,
+    ) -> None:
+        """POST /api/build?repo=<path>&from=<agent>  body=<задача> — тикет Билдеру.
+        Аппендит тикет в очередь klod-builder (~/.builder/queue.json). Билдер сам
+        переклассифицирует kind (critical для lineman/keymaster/censor) при claim."""
+        from urllib.parse import urlparse, parse_qs
+        import time as _time
+
+        headers: dict[str, str] = {}
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+            d = hdr.decode("utf-8", "replace").strip()
+            if ": " in d:
+                k, v = d.split(": ", 1)
+                headers[k.lower()] = v
+        clen = int(headers.get("content-length", "0") or "0")
+        body = await asyncio.wait_for(rd.read(min(clen, 65536)), timeout=10) if clen > 0 else b""
+
+        url = urlparse(request_path)
+        qs = parse_qs(url.query)
+        task = body.decode("utf-8", "replace").strip()
+        if task.startswith("{"):
+            try:
+                task = json.loads(body).get("task", task)
+            except Exception:
+                pass
+        repo = (qs.get("repo") or [""])[0]
+        frm = (qs.get("from") or ["?"])[0]
+        if not task or not repo:
+            return self._send_simple_and_close(
+                wr, 400, {"error": "need ?repo=<path> and body=<task>"})
+
+        qpath = os.path.expanduser(os.environ.get("BUILDER_QUEUE", "~/.builder/queue.json"))
+        os.makedirs(os.path.dirname(qpath), exist_ok=True)
+        try:
+            items = json.loads(open(qpath).read()) if os.path.exists(qpath) else []
+        except Exception:
+            items = []
+        tid = f"t{int(_time.time())}"
+        items.append({"id": tid, "repo_path": repo, "task": task, "kind": "normal",
+                      "status": "queued", "branch": "", "pr_url": "",
+                      "created_at": "", "evidence": {"from": frm}})
+        try:
+            with open(qpath, "w") as f:
+                f.write(json.dumps(items, ensure_ascii=False, indent=1))
+        except Exception as e:
+            return self._send_simple_and_close(wr, 500, {"error": str(e)[:200]})
+        logger.info("builder_ticket", id=tid, repo=repo, from_=frm)
+        self._send_simple_and_close(wr, 200, {"status": "ok", "id": tid, "queued": len(items)})
 
     async def _raw_api_search(
         self,
