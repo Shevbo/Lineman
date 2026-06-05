@@ -370,6 +370,8 @@ class ProxyServer:
             # Dashboard static serve
             elif request_path_only in ("/dashboard", "/dashboard/"):
                 await self._raw_dashboard(rd, wr)
+            elif request_path_only in ("/klod-chat", "/klod-chat/"):
+                await self._raw_dashboard(rd, wr, "klod-chat.html")
                 return
 
             # Reverse proxy: /proxy/{provider}/... — plaintext body inspection
@@ -1755,15 +1757,16 @@ class ProxyServer:
         self,
         rd: asyncio.StreamReader,
         wr: asyncio.StreamWriter,
+        filename: str = "index.html",
     ) -> None:
-        """GET /dashboard — serve dashboard/index.html."""
+        """GET /dashboard|/klod-chat — serve dashboard/<filename>."""
         # Drain headers
         while True:
             hdr = await asyncio.wait_for(rd.readline(), timeout=5)
             if hdr in (b"\r\n", b"\n", b""):
                 break
 
-        html_path = Path(__file__).resolve().parent / "dashboard" / "index.html"
+        html_path = Path(__file__).resolve().parent / "dashboard" / filename
         if not html_path.exists():
             body = b"<h1>Dashboard not found. Create dashboard/index.html</h1>"
             ct = "text/html"

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Чат агентов с Клодом</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --agent:#1f6feb22; --claude:#2ea04322;
+          --agent-b:#388bfd; --claude-b:#3fb950; --txt:#e6edf3; --muted:#8b949e; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  header { position:sticky; top:0; background:var(--panel); padding:10px 16px;
+           border-bottom:1px solid #30363d; display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:16px; margin:0; }
+  header .meta { color:var(--muted); font-size:12px; margin-left:auto; }
+  #log { max-width:900px; margin:0 auto; padding:16px; }
+  .row { display:flex; margin:10px 0; }
+  .row.agent { justify-content:flex-start; }
+  .row.claude { justify-content:flex-end; }
+  .bubble { max-width:78%; padding:8px 12px; border-radius:12px; white-space:pre-wrap;
+            word-break:break-word; border:1px solid #30363d; }
+  .agent .bubble { background:var(--agent); border-left:3px solid var(--agent-b); }
+  .claude .bubble { background:var(--claude); border-right:3px solid var(--claude-b); }
+  .who { font-size:11px; color:var(--muted); margin-bottom:3px; }
+  .who b { color:var(--txt); }
+  .kind { font-size:10px; padding:1px 6px; border-radius:8px; background:#30363d;
+          color:var(--muted); margin-left:6px; }
+  .empty { color:var(--muted); text-align:center; padding:40px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>💬 Чат агентов с Клодом <span style="color:var(--muted);font-weight:400">(klod-access)</span></h1>
+  <span class="meta" id="meta">загрузка…</span>
+</header>
+<div id="log"><div class="empty">загрузка…</div></div>
+<script>
+const MSK = 3*3600*1000;
+function fmt(ts){ try{ const d=new Date(ts); return new Date(d.getTime()).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){return ts||'';} }
+function esc(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+async function getJson(u){ try{ const r=await fetch(u,{cache:'no-store'}); return await r.json(); }catch(e){ return null; } }
+async function load(){
+  const [inb,out] = await Promise.all([
+    getJson('/api/agent/klod-access/inbox?since=0&limit=400'),
+    getJson('/api/agent/klod-access/outbox?since=0&limit=400'),
+  ]);
+  const items=[];
+  (inb&&inb.messages||[]).forEach(m=>items.push({side:'agent', id:m.id, ts:m.ts,
+    who:(m.from||'?')+(m.node?('@'+m.node):''), kind:(m.meta&&m.meta.kind)||'', text:m.message}));
+  (out&&out.messages||[]).forEach(m=>items.push({side:'claude', id:m.id, ts:m.ts,
+    who:'→ '+(m.to||'?'), kind:m.in_reply_to?('reply #'+m.in_reply_to):'', text:m.message}));
+  items.sort((a,b)=>(a.id||0)-(b.id||0));
+  const log=document.getElementById('log');
+  if(!items.length){ log.innerHTML='<div class="empty">пока пусто</div>'; }
+  else {
+    log.innerHTML = items.map(it=>
+      `<div class="row ${it.side}"><div class="bubble"><div class="who"><b>${esc(it.who)}</b>`
+      +` · #${it.id} · ${fmt(it.ts)}${it.kind?`<span class="kind">${esc(it.kind)}</span>`:''}</div>`
+      +`${esc(it.text)}</div></div>`).join('');
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+  document.getElementById('meta').textContent =
+    `${items.length} сообщений · обновлено ${new Date().toLocaleTimeString('ru-RU',{timeZone:'Europe/Moscow'})} MSK`;
+}
+load(); setInterval(load, 4000);
+</script>
+</body>
+</html>
