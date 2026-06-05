@@ -375,6 +375,9 @@ class ProxyServer:
                 # /api/klod-chat доступен через домен dashboard.shectory.ru (nginx
                 # уже проксирует /api/ → Lineman), без правки nginx.
                 await self._raw_dashboard(rd, wr, "klod-chat.html")
+            elif request_path_only == "/api/search" and method == "GET":
+                # Федеративный web_search (keyless, egress Lineman → iProyal).
+                await self._raw_api_search(rd, wr, request_path)
                 return
 
             # Reverse proxy: /proxy/{provider}/... — plaintext body inspection
@@ -1755,6 +1758,40 @@ class ProxyServer:
         )
         await wr.drain()
         wr.close()
+
+    async def _raw_api_search(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        request_path: str,
+    ) -> None:
+        """GET /api/search?q=&limit= — федеративный web_search (keyless DuckDuckGo
+        через egress Lineman). App-friendly JSON {query,count,results:[{title,url,snippet}]}."""
+        from urllib.parse import urlparse, parse_qs
+        import lineman_search
+
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+
+        url = urlparse(request_path)
+        qs = parse_qs(url.query)
+        query = (qs.get("q") or qs.get("query") or [""])[0].strip()
+        try:
+            limit = min(int((qs.get("limit") or ["6"])[0]), 15)
+        except Exception:
+            limit = 6
+        if not query:
+            return self._send_simple_and_close(wr, 400, {"error": "missing q"})
+        try:
+            results = await lineman_search.web_search(
+                query, proxy="http://127.0.0.1:9090", limit=limit)
+            self._send_simple_and_close(
+                wr, 200, {"query": query, "count": len(results), "results": results})
+        except Exception as e:
+            logger.exception("web_search_failed")
+            self._send_simple_and_close(wr, 502, {"error": str(e)[:200]})
 
     async def _raw_dashboard(
         self,
