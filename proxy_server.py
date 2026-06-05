@@ -370,7 +370,10 @@ class ProxyServer:
             # Dashboard static serve
             elif request_path_only in ("/dashboard", "/dashboard/"):
                 await self._raw_dashboard(rd, wr)
-            elif request_path_only in ("/klod-chat", "/klod-chat/"):
+            elif request_path_only in ("/klod-chat", "/klod-chat/",
+                                       "/api/klod-chat", "/api/klod-chat/"):
+                # /api/klod-chat доступен через домен dashboard.shectory.ru (nginx
+                # уже проксирует /api/ → Lineman), без правки nginx.
                 await self._raw_dashboard(rd, wr, "klod-chat.html")
                 return
 
