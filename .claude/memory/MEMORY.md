@@ -12,6 +12,7 @@
 - [06_testing.md](06_testing.md) — какие тесты, как запускать, что покрыто
 - [07_gemini_key_policy.md](07_gemini_key_policy.md) — Gemini key policy, anti-dormant, IP allowlist
 - [08_mission.md](08_mission.md) — миссия Lineman, что я делаю постоянно, контракт с агентами
+- [09_portal_auth.md](09_portal_auth.md) — единый каталог Shectory Portal: nginx auth_request → Lineman bridge → portal:3000 bcrypt
 
 ## Правила записи
 

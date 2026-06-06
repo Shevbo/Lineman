@@ -7,6 +7,7 @@ to the correct upstream, injects API keys, and logs everything.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -192,6 +193,13 @@ class ProxyServer:
         # Request dedup cache + retry analyzer
         self._dedup = DedupCache(self._config)
 
+        # Shectory Portal — единый каталог пользователей.
+        # bridge: POST $SHECTORY_PORTAL_URL/api/internal/verify-portal-credentials
+        # Bearer $SHECTORY_AUTH_BRIDGE_SECRET, body {email, password}.
+        # Кэш положительных проверок: sha256(email:password) → expires_at.
+        self._portal_auth_cache: dict[str, float] = {}
+        self._portal_auth_ttl: float = 300.0
+
         # LLM concurrency queue — prevents cascade overloads under heavy load
         llm_q = proxy_cfg.get("llm_queue", {})
         self._llm_sem = asyncio.Semaphore(llm_q.get("max_concurrent", 5))
@@ -361,6 +369,26 @@ class ProxyServer:
                 await self._raw_api_leak_alert(rd, wr)
                 return
 
+            # nginx auth_request на dashboard.shectory.ru — единый каталог Shectory Portal.
+            # Возвращает 200 если Basic-кред валиден через portal bridge, 401 иначе.
+            elif request_path_only == "/api/portal-auth-check":
+                headers = await self._read_headers(rd)
+                creds = self._parse_basic_auth(headers)
+                if creds and await self._verify_portal_credentials(*creds):
+                    body = b'{"ok":true}'
+                    wr.write(
+                        f"HTTP/1.1 200 OK\r\n"
+                        f"X-Portal-User: {creds[0]}\r\n"
+                        f"Content-Type: application/json\r\n"
+                        f"Content-Length: {len(body)}\r\n\r\n".encode()
+                    )
+                    wr.write(body)
+                    await wr.drain()
+                    wr.close()
+                else:
+                    await self._send_401_basic(wr)
+                return
+
             # Agent-to-agent messaging API
             # /api/agent/{target_agent_id}/message?from=<from_agent_id>&message=<msg>
             elif request_path_only.startswith("/api/agent/"):
@@ -372,9 +400,16 @@ class ProxyServer:
                 await self._raw_dashboard(rd, wr)
             elif request_path_only in ("/klod-chat", "/klod-chat/",
                                        "/api/klod-chat", "/api/klod-chat/"):
-                # /api/klod-chat доступен через домен dashboard.shectory.ru (nginx
-                # уже проксирует /api/ → Lineman), без правки nginx.
-                await self._raw_dashboard(rd, wr, "klod-chat.html")
+                # Защита единой учёткой Shectory Portal (portal_users → bcrypt).
+                # Bridge: $SHECTORY_PORTAL_URL/api/internal/verify-portal-credentials.
+                headers = await self._read_headers(rd)
+                creds = self._parse_basic_auth(headers)
+                if not creds or not await self._verify_portal_credentials(*creds):
+                    await self._send_401_basic(wr)
+                    return
+                await self._raw_dashboard(
+                    rd, wr, "klod-chat.html", drain_headers=False
+                )
             elif request_path_only in ("/api/search", "/api/youtube") and method == "GET":
                 # Федеративный web_search / youtube-поиск (keyless, egress Lineman).
                 await self._raw_api_search(rd, wr, request_path)
@@ -1858,18 +1893,109 @@ class ProxyServer:
             logger.exception("web_search_failed")
             self._send_simple_and_close(wr, 502, {"error": str(e)[:200]})
 
+    async def _read_headers(
+        self,
+        rd: asyncio.StreamReader,
+        timeout: float = 5.0,
+    ) -> dict[str, str]:
+        """Read HTTP headers until blank line; return lowercase-keyed dict."""
+        headers: dict[str, str] = {}
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=timeout)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+            try:
+                name, sep, value = hdr.decode("latin-1", errors="replace").partition(":")
+                if sep:
+                    headers[name.strip().lower()] = value.strip()
+            except Exception:
+                pass
+        return headers
+
+    def _parse_basic_auth(self, headers: dict[str, str]) -> tuple[str, str] | None:
+        auth = headers.get("authorization", "")
+        if not auth.lower().startswith("basic "):
+            return None
+        try:
+            decoded = base64.b64decode(auth.split(" ", 1)[1].strip()).decode("utf-8")
+        except Exception:
+            return None
+        email, sep, password = decoded.partition(":")
+        if not sep or not email or not password:
+            return None
+        return email.strip(), password
+
+    async def _verify_portal_credentials(self, email: str, password: str) -> bool:
+        """Verify credentials against Shectory Portal bridge with positive-cache TTL."""
+        key = hashlib.sha256(f"{email.lower()}:{password}".encode("utf-8")).hexdigest()
+        now = time.time()
+        exp = self._portal_auth_cache.get(key)
+        if exp and exp > now:
+            return True
+
+        secret = (os.environ.get("SHECTORY_AUTH_BRIDGE_SECRET") or "").strip()
+        if not secret:
+            logger.warning("portal_auth_no_secret")
+            return False
+        base = (os.environ.get("SHECTORY_PORTAL_URL")
+                or "http://127.0.0.1:3000").rstrip("/")
+        url = f"{base}/api/internal/verify-portal-credentials"
+        try:
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as sess:
+                async with sess.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {secret}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"email": email, "password": password},
+                ) as r:
+                    if r.status != 200:
+                        return False
+                    data = await r.json(content_type=None)
+                    if not data or not data.get("ok"):
+                        return False
+        except Exception as e:
+            logger.warning("portal_auth_check_failed", error=str(e)[:160])
+            return False
+
+        self._portal_auth_cache[key] = now + self._portal_auth_ttl
+        if len(self._portal_auth_cache) > 256:
+            self._portal_auth_cache = {
+                k: v for k, v in self._portal_auth_cache.items() if v > now
+            }
+        return True
+
+    async def _send_401_basic(
+        self,
+        wr: asyncio.StreamWriter,
+        realm: str = "Shectory Portal",
+    ) -> None:
+        body = b'{"error":"auth required"}'
+        wr.write(
+            f"HTTP/1.1 401 Unauthorized\r\n"
+            f"WWW-Authenticate: Basic realm=\"{realm}\", charset=\"UTF-8\"\r\n"
+            f"Content-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n\r\n".encode()
+        )
+        wr.write(body)
+        await wr.drain()
+        wr.close()
+
     async def _raw_dashboard(
         self,
         rd: asyncio.StreamReader,
         wr: asyncio.StreamWriter,
         filename: str = "index.html",
+        drain_headers: bool = True,
     ) -> None:
         """GET /dashboard|/klod-chat — serve dashboard/<filename>."""
-        # Drain headers
-        while True:
-            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
-            if hdr in (b"\r\n", b"\n", b""):
-                break
+        if drain_headers:
+            while True:
+                hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+                if hdr in (b"\r\n", b"\n", b""):
+                    break
 
         html_path = Path(__file__).resolve().parent / "dashboard" / filename
         if not html_path.exists():
