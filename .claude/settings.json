@@ -86,7 +86,13 @@
       "Write(tests/**)",
       "Write(docs/**)",
       "Bash(mkdir -p /home/shectory/.claude/projects/-home-shectory-workspaces-infra-lineman/memory *)",
-      "WebFetch(domain:ai.google.dev)"
+      "WebFetch(domain:ai.google.dev)",
+      "mcp__plugin_playwright_playwright__browser_resize",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "mcp__plugin_playwright_playwright__browser_take_screenshot",
+      "mcp__plugin_playwright_playwright__browser_console_messages",
+      "mcp__plugin_playwright_playwright__browser_network_requests",
+      "mcp__plugin_playwright_playwright__browser_evaluate"
     ],
     "deny": [
       "Bash(rm -rf:*)",
@@ -102,7 +108,24 @@
       "Bash(git reset --hard:*)",
       "Bash(git clean -fd:*)",
       "Bash(git rebase -i:*)",
-      "Bash(sudo:*)",
+      "Bash(sudo rm:*)",
+      "Bash(sudo dd:*)",
+      "Bash(sudo mkfs:*)",
+      "Bash(sudo su:*)",
+      "Bash(sudo -i:*)",
+      "Bash(sudo -s:*)",
+      "Bash(sudo bash:*)",
+      "Bash(sudo sh:*)",
+      "Bash(sudo passwd:*)",
+      "Bash(sudo visudo:*)",
+      "Bash(sudo useradd:*)",
+      "Bash(sudo userdel:*)",
+      "Bash(sudo usermod:*)",
+      "Bash(sudo chown -R:*)",
+      "Bash(sudo chmod -R:*)",
+      "Bash(sudo reboot:*)",
+      "Bash(sudo shutdown:*)",
+      "Bash(sudo halt:*)",
       "Bash(systemctl --system:*)",
       "Bash(systemctl status:*)",
       "Bash(systemctl restart:*)",
@@ -125,7 +148,6 @@
     ]
   },
   "model": "claude-opus-4-7",
-  "outputStyle": "default",
   "hooks": {
     "SessionStart": [
       {
@@ -138,5 +160,6 @@
         ]
       }
     ]
-  }
+  },
+  "outputStyle": "default"
 }

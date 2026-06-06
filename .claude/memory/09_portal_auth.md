@@ -3,6 +3,14 @@
 Единая учётка `bshevelev@mail.ru` (роль `admin`) живёт в Postgres `portal_users` на hoster (`83.69.248.175`) и проверяется через portal-bridge.
 Lineman гейтит dashboard.shectory.ru через этот каталог — нет локальных htpasswd / boris.
 
+**ОБНОВЛЕНО 2026-06-06:** Basic-popup заменён на **брендированный экран входа** (cookie-сессия).
+Поток: нет сессии → nginx `302 /login` → фирменная страница (`dashboard/login.html`, гифка Shectory)
+→ `POST /api/login` (verify через bridge → HttpOnly cookie `shectory_session`, HMAC) →
+nginx `auth_request /api/session-check` валидирует cookie. Эндпоинты: `GET /login`,
+`POST /api/login`, `GET /api/session-check`, `POST /api/logout`. nginx-конфиг —
+`nginx/dashboard.shectory.ru.conf` (применён). Basic (`/api/portal-auth-check`) оставлен
+как defence-in-depth fallback для прямого доступа к :9090. Диаграмма ниже — историческая (Basic).
+
 ## Архитектура auth
 
 ```
