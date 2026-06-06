@@ -60,9 +60,9 @@ curl -X POST "http://127.0.0.1:9093/keymaster/pre_approve?name=<NAME>&requester=
 
 Если ты на другой ноде — попроси Klod-Access или Бориса это сделать.
 
-## 3.5 Vision (картинки) — LM Studio gemma-4-e4b-it вместо платного Gemini
+## 3.5 Vision (картинки) — LM Studio qwen/qwen3.5-9b вместо платного Gemini
 
-В федерации есть **бесплатный мультимодальный LLM** — `gemma-4-e4b-it` на LM Studio (hyperv через SSH-туннель). Принимает картинки в OpenAI-vision формате:
+В федерации есть **бесплатный мультимодальный LLM** — `qwen/qwen3.5-9b` на LM Studio (hyperv через SSH-туннель). Принимает картинки в OpenAI-vision формате:
 
 ```python
 import httpx, base64
@@ -72,7 +72,7 @@ r = httpx.post(
     "http://10.66.0.1:9090/proxy/lm-studio/v1/chat/completions",
     headers={"X-Agent-Name": "<твой_id>", "Authorization":"Bearer local"},
     json={
-        "model": "gemma-4-e4b-it",      # точное имя, БЕЗ префикса google/
+        "model": "qwen/qwen3.5-9b",      # точное имя, БЕЗ префикса google/
         "messages":[{"role":"user","content":[
             {"type":"text","text":"Что на этой картинке? 1-2 предложения."},
             {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{img_b64}"}}
@@ -84,7 +84,7 @@ print(r["choices"][0]["message"]["content"])
 ```
 
 Что важно:
-- `gemma-4-e4b-it` (НЕ `google/gemma-4-e4b`) — точный identifier модели в LM Studio.
+- `qwen/qwen3.5-9b` (НЕ `google/gemma-4-e4b`) — точный identifier модели в LM Studio.
 - Поддерживается: `image/jpeg`, `image/png`, `image/webp`, base64 data URLs.
 - Latency: 3-20 секунд за картинку (GPU на hyperv). Для **batch'а** используй Lazy Queue с `kind="vision"` / `"ocr"` / `"caption"` / `"describe"` — поставится в очередь, worker сам обработает.
 - Качество: уровень Gemini-flash для типичных задач (описание, OCR, классификация). Для precision-критичных задач (медицина/документы строгой формы) — всё равно Gemini Pro.
@@ -151,7 +151,7 @@ LM_STUDIO = "http://192.168.1.70:1234"
 - Если задача требует precision (распознать формулу/диаграмму) — поднимай priority и Lazy Queue фолбэкнет на Gemini-flash через rproxy (по нашим правилам).
 
 Раньше: `gemini-2.5-flash` для каждой картинки ≈ $0.15/M tokens-in. На 1000 уроков с фото ≈ $1.50.  
-Теперь: те же 1000 уроков через gemma-4-e4b-it ≈ **$0**. Sleeping latency только.
+Теперь: те же 1000 уроков через qwen/qwen3.5-9b ≈ **$0**. Sleeping latency только.
 
 ## 4. LLM-вызовы — только через Lineman reverse-proxy
 
@@ -252,6 +252,20 @@ token = get("HH_ACCESS_TOKEN", requester="career-bot@smain",
 - Никаких новых helper'ов. Никаких новых endpoint'ов.
 - Запрет на write от агентов сохраняется. HTTP `/keymaster/store` остаётся 403.
 
+## 5.6 Вход ПОЛЬЗОВАТЕЛЕЙ в твоё приложение (логин людей)
+
+Если твой сервис пускает **людей** по логину/паролю — **не заводи свою таблицу паролей и свой
+каталог пользователей**. Источник истины — единая база **Shectory Portal** (`portal_users`).
+Бэкенд проверяет пароль у портала через bridge и на успехе выдаёт свою сессию.
+
+- Полный стандарт + чек-лист подключения: **[PORTAL_AUTH_STANDARD.md](PORTAL_AUTH_STANDARD.md)** (владелец — Klod-Access).
+- Кратко: `POST {SHECTORY_PORTAL_URL}/api/internal/verify-portal-credentials`,
+  заголовок `Authorization: Bearer {SHECTORY_AUTH_BRIDGE_SECRET}` (тот же секрет, что у портала —
+  бери через `klod_keymaster.get`), тело `{email,password}` → `{ok,email,role,fullName}`.
+  Логин пользователя = его **email портала** (`bshevelev@mail.ru` = superadmin).
+- Это ОТДЕЛЬНО от секретов/LLM выше: тут (онбординг) — про твои сервисные секреты и LLM-вызовы;
+  вход живых людей — по ссылке-стандарту.
+
 ## 6. Ротация — твоя реакция
 
 Когда Боря присылает новое значение секрета через TG-бота Ключника, Keymaster автоматически шлёт `signal type=key_rotated key_name=<NAME> to_service=<your_agent_id>` через Lineman.
@@ -343,6 +357,7 @@ Helper `klod_client.py` лежит в `~/workspaces/infra/lineman/klod_client.py
 ## 11. Связанные документы
 
 - [SECRETS_PLAYBOOK.md](SECRETS_PLAYBOOK.md) — глубокие правила и анти-паттерны.
+- [PORTAL_AUTH_STANDARD.md](PORTAL_AUTH_STANDARD.md) — единый вход ПОЛЬЗОВАТЕЛЕЙ по учётке Shectory Portal (если твой сервис логинит людей). Канон, владелец — Klod-Access.
 - [REPORT_2026-05-29.md](REPORT_2026-05-29.md) — что было ДО внедрения стандарта (12 предложений P0/P1/P2).
 - [DAILY_*.md](.) — ежедневные KPI-отчёты от Klod-Access.
 
