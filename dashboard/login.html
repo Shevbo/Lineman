@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Вход — Shectory Federation</title>
+  <style>
+    :root{
+      --bg:#0b1220; --panel:#0f172a; --panel2:#0b1220; --line:#1e293b;
+      --muted:#94a3b8; --text:#e8efff; --accent:#2563eb; --accent2:#1d4ed8;
+      --danger:#f87171; --ok:#34d399;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;height:100%}
+    body{
+      background:radial-gradient(1200px 600px at 50% -10%, #16223c 0%, var(--bg) 55%);
+      color:var(--text); font:15px/1.5 Inter,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      min-height:100vh;
+    }
+    .root{max-width:1120px;margin:0 auto;padding:24px 18px;min-height:100vh;display:flex;flex-direction:column}
+    .head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:20px}
+    .brand img{height:52px;width:auto;display:block;border-radius:10px}
+    .brand .fallback{font-weight:800;letter-spacing:.14em;color:#cfe0ff;border:1px solid var(--line);
+      background:#0f182a;border-radius:10px;padding:12px 14px;display:none}
+    .proj{text-align:right;min-width:0}
+    .badge{display:inline-block;border:1px solid var(--line);background:var(--panel);
+      border-radius:11px;padding:7px 14px;font-weight:800;letter-spacing:.1em;color:#fff}
+    .ver{margin-top:6px;font-size:12px;color:var(--muted)}
+    .grid{display:grid;grid-template-columns:1.7fr 1fr;gap:18px;flex:1}
+    .card{border:1px solid var(--line);border-radius:16px;background:linear-gradient(180deg,rgba(15,23,42,.7),rgba(11,18,32,.5));
+      padding:26px}
+    .info h1{margin:0 0 6px;font-size:24px;font-weight:700}
+    .info .sub{color:#9fb3d8;font-weight:600;margin-bottom:16px}
+    .info p{color:var(--muted);max-width:48ch}
+    .pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+    .pill{border:1px solid var(--line);background:#0d1525;border-radius:999px;padding:6px 12px;font-size:12.5px;color:#bcd0f0}
+    .login{display:flex;flex-direction:column}
+    .login h2{margin:0 0 4px;font-size:19px}
+    .login .hint{color:var(--muted);font-size:13px;margin:0 0 16px}
+    form{display:flex;flex-direction:column;gap:12px}
+    label{font-size:12.5px;color:var(--muted);font-weight:600}
+    input{width:100%;margin-top:6px;border:1px solid var(--line);border-radius:10px;background:#0b1220;
+      color:var(--text);padding:12px 13px;font-size:15px;outline:none;transition:border-color .15s}
+    input:focus{border-color:var(--accent)}
+    button{margin-top:4px;border:0;border-radius:10px;padding:13px;background:var(--accent);color:#fff;
+      font-weight:700;font-size:15px;cursor:pointer;transition:background .15s}
+    button:hover{background:var(--accent2)}
+    button:disabled{opacity:.55;cursor:default}
+    .msg{min-height:18px;font-size:13.5px;margin-top:2px}
+    .msg.err{color:var(--danger)}
+    .msg.ok{color:var(--ok)}
+    .foot{margin-top:16px;display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px}
+    .foot a{color:#7aa2ff;text-decoration:none}
+    .foot a:hover{text-decoration:underline}
+    .copyright{margin-top:22px;color:#5b6b86;font-size:12px;text-align:center}
+    @media (max-width:900px){.grid{grid-template-columns:1fr}.info{order:2}}
+  </style>
+</head>
+<body>
+  <main class="root">
+    <header class="head">
+      <div class="brand">
+        <img src="https://shectory.ru/brand/shectory-logo.gif" alt="Shectory"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='inline-block'">
+        <span class="fallback">SHECTORY</span>
+      </div>
+      <div class="proj">
+        <span class="badge">LINEMAN</span>
+        <div class="ver">шлюз федерации · auth 2.0</div>
+      </div>
+    </header>
+
+    <section class="grid">
+      <article class="card info">
+        <h1>Shectory Federation</h1>
+        <div class="sub">Lineman — единый шлюз и сигнальный центр</div>
+        <p>Дашборд федерации и чат с агентами. Доступ — по единой учётной записи
+           Shectory Portal. Введите e-mail и пароль вашей портальной учётки.</p>
+        <div class="pills">
+          <span class="pill">🚦 Топология узлов</span>
+          <span class="pill">📊 Токены и затраты</span>
+          <span class="pill">🤖 Чат с агентами</span>
+          <span class="pill">🔐 Единая учётка</span>
+        </div>
+      </article>
+
+      <aside class="card login">
+        <h2>Вход</h2>
+        <p class="hint">Учётная запись Shectory Portal</p>
+        <form id="f" autocomplete="on">
+          <div>
+            <label for="email">E-mail</label>
+            <input id="email" name="email" type="email" placeholder="you@domain.tld"
+                   autocomplete="username" required autofocus>
+          </div>
+          <div>
+            <label for="password">Пароль</label>
+            <input id="password" name="password" type="password" placeholder="••••••••"
+                   autocomplete="current-password" required>
+          </div>
+          <button id="btn" type="submit">Войти</button>
+          <div id="msg" class="msg" role="status"></div>
+        </form>
+        <div class="foot">
+          <a href="https://shectory.ru/login" target="_blank" rel="noopener">Забыли пароль?</a>
+          <a href="https://shectory.ru" target="_blank" rel="noopener">Портал Shectory</a>
+        </div>
+      </aside>
+    </section>
+
+    <div class="copyright">© Shectory Federation · защищённый доступ</div>
+  </main>
+
+  <script>
+    const f = document.getElementById('f');
+    const btn = document.getElementById('btn');
+    const msg = document.getElementById('msg');
+    const params = new URLSearchParams(location.search);
+    const next = params.get('next') || '/';
+
+    function show(text, ok){ msg.textContent = text; msg.className = 'msg ' + (ok ? 'ok' : 'err'); }
+
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      if (!email || !password){ show('Введите e-mail и пароль', false); return; }
+      btn.disabled = true; show('Проверяем…', true);
+      try {
+        const r = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ email, password }),
+        });
+        if (r.ok) {
+          show('Готово, входим…', true);
+          location.href = (next.startsWith('/') ? next : '/');
+          return;
+        }
+        let err = 'Неверный e-mail или пароль';
+        if (r.status === 503) err = 'Сервис авторизации недоступен. Попробуйте позже.';
+        try { const j = await r.json(); if (j && j.error) err = j.error; } catch (_) {}
+        show(err, false);
+      } catch (_) {
+        show('Сеть недоступна. Повторите попытку.', false);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

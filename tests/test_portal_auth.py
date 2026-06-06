@@ -124,3 +124,55 @@ async def test_verify_portal_credentials_bridge_network_error(srv, monkeypatch):
     with patch("proxy_server.aiohttp.ClientSession", return_value=sess):
         ok = await srv._verify_portal_credentials("a@b.c", "pw")
     assert ok is False
+
+
+# --- Сессия по cookie (брендированный логин вместо Basic popup) ---
+
+def test_session_token_roundtrip(srv, monkeypatch):
+    monkeypatch.setenv("SHECTORY_AUTH_BRIDGE_SECRET", "s3cret")
+    tok = srv._make_session_token("Bshevelev@Mail.ru")
+    assert srv._verify_session_token(tok) == "bshevelev@mail.ru"  # email нормализован
+
+
+def test_session_token_expired(srv, monkeypatch):
+    monkeypatch.setenv("SHECTORY_AUTH_BRIDGE_SECRET", "s3cret")
+    tok = srv._make_session_token("a@b.c", ttl=10, now=1000.0)
+    assert srv._verify_session_token(tok, now=1011.0) is None
+
+
+def test_session_token_tampered_signature(srv, monkeypatch):
+    monkeypatch.setenv("SHECTORY_AUTH_BRIDGE_SECRET", "s3cret")
+    tok = srv._make_session_token("a@b.c")
+    bad = tok[:-2] + ("00" if tok[-2:] != "00" else "11")
+    assert srv._verify_session_token(bad) is None
+
+
+def test_session_token_wrong_secret(srv, monkeypatch):
+    monkeypatch.setenv("SHECTORY_AUTH_BRIDGE_SECRET", "s3cret")
+    tok = srv._make_session_token("a@b.c")
+    monkeypatch.setenv("SHECTORY_AUTH_BRIDGE_SECRET", "other")
+    assert srv._verify_session_token(tok) is None
+
+
+def test_session_token_no_secret(srv, monkeypatch):
+    monkeypatch.delenv("SHECTORY_AUTH_BRIDGE_SECRET", raising=False)
+    assert srv._verify_session_token("a@b.c:9999999999:deadbeef") is None
+
+
+def test_session_token_malformed(srv, monkeypatch):
+    monkeypatch.setenv("SHECTORY_AUTH_BRIDGE_SECRET", "s3cret")
+    assert srv._verify_session_token("garbage") is None
+    assert srv._verify_session_token("") is None
+
+
+def test_session_email_from_cookie(srv, monkeypatch):
+    monkeypatch.setenv("SHECTORY_AUTH_BRIDGE_SECRET", "s3cret")
+    tok = srv._make_session_token("a@b.c")
+    headers = {"cookie": f"foo=bar; shectory_session={tok}; baz=1"}
+    assert srv._session_email_from_cookie(headers) == "a@b.c"
+
+
+def test_session_email_from_cookie_absent(srv, monkeypatch):
+    monkeypatch.setenv("SHECTORY_AUTH_BRIDGE_SECRET", "s3cret")
+    assert srv._session_email_from_cookie({"cookie": "foo=bar"}) is None
+    assert srv._session_email_from_cookie({}) is None

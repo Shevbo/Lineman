@@ -403,45 +403,49 @@ tail -f /tmp/lineman.log
 
 ## Аутентификация — стандарт Shectory Portal (bridge)
 
-Дашборд защищён **единой учёткой Shectory Portal** (общая база `portal_users`, не локальный htpasswd). Старая схема `auth_basic` + `/etc/nginx/.htpasswd-dashboard` **выпилена** (2026-06-05, commit `c6991c8`).
+Дашборд защищён **единой учёткой Shectory Portal** (общая база `portal_users`, не htpasswd) через
+**брендированный экран входа** (НЕ браузерный Basic popup). Логин = **email портала** (напр.
+`bshevelev@mail.ru`). htpasswd-схема выпилена 2026-06-05; Basic popup заменён на cookie-сессию 2026-06-06.
 
-Поток (nginx `auth_request` → Lineman → портал):
-1. Браузер шлёт Basic-кред (**username = email портала**, напр. `bshevelev@mail.ru`).
-2. nginx `auth_request /_portal_auth` → проксирует в Lineman `POST /api/portal-auth-check` (заголовок `Authorization` пробрасывается).
-3. Lineman `_verify_portal_credentials(email, password)` → `POST $SHECTORY_PORTAL_URL/api/internal/verify-portal-credentials`, `Authorization: Bearer $SHECTORY_AUTH_BRIDGE_SECRET`, тело `{email,password}`. Портал сверяет с `portal_users` (bcrypt) → `{ok,email,role,fullName}`.
-4. 2xx → доступ (positive-cache 300с); 401 → nginx отдаёт `WWW-Authenticate Basic realm="Shectory Portal"`.
+Поток (cookie-сессия + фирменная страница):
+1. Нет сессии → nginx `auth_request /_session_check` → 401 → `302 /login`.
+2. `/login` — брендированная страница Lineman (`dashboard/login.html`: гифка Shectory, инфо-фрейм,
+   форма email+пароль, тёмная тема портала). Форма шлёт `POST /api/login {email,password}`.
+3. Lineman `_verify_portal_credentials` → `POST $SHECTORY_PORTAL_URL/api/internal/verify-portal-credentials`
+   (`Authorization: Bearer $SHECTORY_AUTH_BRIDGE_SECRET`) → портал сверяет `portal_users` (bcrypt).
+4. Успех → `Set-Cookie shectory_session=<HMAC>` (HttpOnly, Secure, SameSite=Lax, 7д; подпись —
+   тем же `SHECTORY_AUTH_BRIDGE_SECRET`) → редирект на `?next`. Ошибка → 401 с текстом на странице.
+5. Дальше nginx `auth_request /_session_check` → Lineman `GET /api/session-check` валидирует cookie
+   (HMAC+срок) → 200/401. `POST /api/logout` чистит cookie.
 
-Env у Lineman (через `run-lineman.sh`/keymaster): `SHECTORY_PORTAL_URL` (на smain = `http://127.0.0.1:3000`), `SHECTORY_AUTH_BRIDGE_SECRET` (тот же, что в `.env` портала; в чат/лог не печатать).
+Эндпоинты Lineman: `GET /login`, `POST /api/login`, `GET /api/session-check`, `POST /api/logout`
+(+ defence-in-depth: `/klod-chat` принимает cookie напрямую). Хелперы `_make/_verify_session_token`,
+`_session_email_from_cookie` (тесты — `tests/test_portal_auth.py`).
 
-**Это часть единого стандарта аутентификации федерации.** Канон и как подключить свой сервис — [`docs/PORTAL_AUTH_STANDARD.md`](docs/PORTAL_AUTH_STANDARD.md) (там же ссылки на портальный `unified-auth-users-rbac-ru.md` и пример `ourdiary/RUNBOOK.md`).
+Env у Lineman: `SHECTORY_PORTAL_URL` (на smain `http://127.0.0.1:3000`), `SHECTORY_AUTH_BRIDGE_SECRET`
+(тот же, что в `.env` портала; в чат/лог не печатать).
+
+**Часть единого стандарта федерации.** Канон + брендированный welcome-экран — [`docs/PORTAL_AUTH_STANDARD.md`](docs/PORTAL_AUTH_STANDARD.md).
 
 ### nginx (dashboard.shectory.ru)
 
-Файл: `/etc/nginx/sites-available/dashboard.shectory.ru`
+Полный конфиг — [`nginx/dashboard.shectory.ru.conf`](nginx/dashboard.shectory.ru.conf) (источник истины).
+Применение (sudo у Бориса): `sudo cp nginx/dashboard.shectory.ru.conf /etc/nginx/sites-available/dashboard.shectory.ru && sudo nginx -t && sudo systemctl reload nginx`.
 
 ```nginx
-server {
-    listen 443 ssl;
-    server_name dashboard.shectory.ru;
-    # ... ssl ...
-    location = /_portal_auth {           # internal: проверка кред через Lineman→портал
-        internal;
-        proxy_pass http://127.0.0.1:9090/api/portal-auth-check;
-        proxy_pass_request_body off;
-        proxy_set_header Content-Length "";
-        proxy_set_header Authorization $http_authorization;
-    }
-    location @portal_login {
-        add_header WWW-Authenticate 'Basic realm="Shectory Portal", charset="UTF-8"' always;
-        return 401;
-    }
-    location /     { auth_request /_portal_auth; error_page 401 = @portal_login; proxy_pass http://127.0.0.1:9090/dashboard; }
-    location /api/ { auth_request /_portal_auth; error_page 401 = @portal_login; proxy_pass http://127.0.0.1:9090/api/; }
+location = /_session_check {                 # internal: валидация cookie-сессии
+    internal; proxy_pass http://127.0.0.1:9090/api/session-check;
+    proxy_pass_request_body off; proxy_set_header Cookie $http_cookie;
 }
+location = /login      { proxy_pass http://127.0.0.1:9090/login; }       # публичные
+location = /api/login  { proxy_pass http://127.0.0.1:9090/api/login; }
+location = /api/logout { proxy_pass http://127.0.0.1:9090/api/logout; proxy_set_header Cookie $http_cookie; }
+location /     { auth_request /_session_check; error_page 401 = @login_redirect; proxy_pass http://127.0.0.1:9090/dashboard; proxy_set_header Cookie $http_cookie; }
+location /api/ { auth_request /_session_check; error_page 401 = @login_redirect; proxy_pass http://127.0.0.1:9090/api/; proxy_set_header Cookie $http_cookie; }
+location @login_redirect { return 302 /login?next=$request_uri; }
 ```
 
-SSL-сертификат: Let's Encrypt, auto-renewal через certbot.  
-**Сброс пароля пользователя** — только в портале (`portal_users`, bcrypt), не в nginx. htpasswd больше не используется.
+**Сброс пароля пользователя** — только в портале (`portal_users`, bcrypt; UI `https://shectory.ru/login` → «Забыли пароль»), не в nginx.
 
 ---
 

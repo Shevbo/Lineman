@@ -15,6 +15,25 @@
 подписанный сессионный токен.** Запрещено заводить автономные каталоги пользователей в
 прикладных проектах (см. портальный контракт ниже).
 
+## Брендированный экран входа (ОБЯЗАТЕЛЕН — не сырой Basic popup)
+
+Логин-экран **любого** приложения Shectory должен быть единым, фирменным и профессиональным.
+**Запрещён** браузерный Basic Auth popup как лицо входа. Обязательная композиция (стандарт
+портала `docs/welcome-page-standard-ru.md` + шаблон `templates/shectory-welcome-frame/`):
+
+- большой информационный фрейм проекта (кастомный HTML/CSS);
+- **слева сверху — логотип Shectory** (анимированная гифка `shectory-portal/public/brand/shectory-logo.gif`,
+  публично `https://shectory.ru/brand/shectory-logo.gif`);
+- справа сверху — логотип проекта + версии модулей;
+- унифицированная область логина: email + пароль, понятные ошибки, **HttpOnly cookie-сессия**,
+  ссылки на восстановление пароля (портал `https://shectory.ru/login`) и поддержку.
+
+Эталон-реализация (Next.js): `shectory-portal/src/app/login/page.tsx`.
+Эталон для не-портального бэкенда (статический HTML + cookie через bridge): дашборд Lineman —
+`dashboard/login.html` + эндпоинты `GET /login` / `POST /api/login` / `GET /api/session-check`
+/ `POST /api/logout` (см. [WIKI.md](../WIKI.md#аутентификация--стандарт-shectory-portal-bridge)).
+nginx делает `auth_request` на session-check, на 401 — `302 /login` (не Basic-realm).
+
 ## Bridge-контракт (проверка пароля у портала)
 
 ```
@@ -65,8 +84,9 @@ Content-Type: application/json
 
 1. Получи `SHECTORY_AUTH_BRIDGE_SECRET` через Keymaster (`klod_keymaster.get`), то же значение
    что в `.env` портала. Не клади на диск/в дамп PM2.
-2. На входе (`/login` или Basic-prompt) бери **email + пароль**, шли bridge-запрос выше.
-3. 200 `{ok:true}` → выпусти свою сессию (cookie/token). Не-200 → отказ (или break-glass, если задан).
+2. Сделай **брендированный `/login`** по стандарту welcome-экрана (см. раздел выше), форма шлёт
+   email + пароль на свой backend → bridge-запрос. НЕ используй сырой Basic popup как вход.
+3. 200 `{ok:true}` → выпусти свою сессию (HttpOnly cookie/token). Не-200 → отказ (или break-glass, если задан).
 4. Username для пользователя — его **email портала** (не выдуманный логин). Заведение/сброс пароля —
    только в портале (`portal_users`, bcrypt), не у себя.
 5. Next.js+Prisma и нужен полноценный in-app RBAC (users+profiles, NextAuth) — см. портальный

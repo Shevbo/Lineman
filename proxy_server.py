@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -389,6 +390,51 @@ class ProxyServer:
                     await self._send_401_basic(wr)
                 return
 
+            # Брендированный логин Shectory (cookie-сессия вместо Basic popup).
+            elif request_path_only in ("/login", "/login/") and method == "GET":
+                await self._raw_dashboard(rd, wr, "login.html")
+                return
+            elif request_path_only == "/api/login" and method == "POST":
+                await self._raw_api_login(rd, wr)
+                return
+            # nginx auth_request: 200 если валидна cookie-сессия, 401 иначе (без popup).
+            elif request_path_only == "/api/session-check":
+                headers = await self._read_headers(rd)
+                email = self._session_email_from_cookie(headers)
+                if email:
+                    body = b'{"ok":true}'
+                    wr.write(
+                        f"HTTP/1.1 200 OK\r\nX-Portal-User: {email}\r\n"
+                        f"Content-Type: application/json\r\n"
+                        f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+                    )
+                    wr.write(body)
+                else:
+                    body = b'{"error":"no session"}'
+                    wr.write(
+                        f"HTTP/1.1 401 Unauthorized\r\n"
+                        f"Content-Type: application/json\r\n"
+                        f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+                    )
+                    wr.write(body)
+                await wr.drain()
+                wr.close()
+                return
+            elif request_path_only in ("/api/logout", "/logout") and method == "POST":
+                await self._read_headers(rd)
+                body = b'{"ok":true}'
+                wr.write(
+                    f"HTTP/1.1 200 OK\r\n"
+                    f"Set-Cookie: shectory_session=; Path=/; HttpOnly; SameSite=Lax; "
+                    f"Max-Age=0\r\n"
+                    f"Content-Type: application/json\r\n"
+                    f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+                )
+                wr.write(body)
+                await wr.drain()
+                wr.close()
+                return
+
             # Agent-to-agent messaging API
             # /api/agent/{target_agent_id}/message?from=<from_agent_id>&message=<msg>
             elif request_path_only.startswith("/api/agent/"):
@@ -400,13 +446,14 @@ class ProxyServer:
                 await self._raw_dashboard(rd, wr)
             elif request_path_only in ("/klod-chat", "/klod-chat/",
                                        "/api/klod-chat", "/api/klod-chat/"):
-                # Защита единой учёткой Shectory Portal (portal_users → bcrypt).
-                # Bridge: $SHECTORY_PORTAL_URL/api/internal/verify-portal-credentials.
+                # Единая учётка Shectory Portal. Основной путь — cookie-сессия (через
+                # nginx /login); Basic оставлен как fallback для прямого доступа к :9090.
                 headers = await self._read_headers(rd)
-                creds = self._parse_basic_auth(headers)
-                if not creds or not await self._verify_portal_credentials(*creds):
-                    await self._send_401_basic(wr)
-                    return
+                if not self._session_email_from_cookie(headers):
+                    creds = self._parse_basic_auth(headers)
+                    if not creds or not await self._verify_portal_credentials(*creds):
+                        await self._send_401_basic(wr)
+                        return
                 await self._raw_dashboard(
                     rd, wr, "klod-chat.html", drain_headers=False
                 )
@@ -1133,7 +1180,9 @@ class ProxyServer:
 
     def _send_simple_and_close(self, wr: asyncio.StreamWriter, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 500: "Internal Server Error"}.get(status, "OK")
+        reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
+                  404: "Not Found", 500: "Internal Server Error",
+                  503: "Service Unavailable"}.get(status, "OK")
         wr.write(
             f"HTTP/1.1 {status} {reason}\r\n"
             f"Content-Type: application/json; charset=utf-8\r\n"
@@ -1925,6 +1974,49 @@ class ProxyServer:
             return None
         return email.strip(), password
 
+    # --- Сессия по cookie (брендированный логин Shectory вместо Basic popup) ---
+    # Токен подписывается тем же SHECTORY_AUTH_BRIDGE_SECRET (стандарт федерации):
+    # формат email:expires:HMAC_SHA256("email:expires", secret). HttpOnly cookie.
+
+    def _session_secret(self) -> str:
+        return (os.environ.get("SHECTORY_AUTH_BRIDGE_SECRET") or "").strip()
+
+    def _make_session_token(self, email: str, ttl: int = 7 * 86400,
+                            now: float | None = None) -> str:
+        secret = self._session_secret()
+        exp = int((now if now is not None else time.time()) + ttl)
+        msg = f"{email.strip().lower()}:{exp}"
+        sig = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
+        return f"{msg}:{sig}"
+
+    def _verify_session_token(self, token: str, now: float | None = None) -> str | None:
+        secret = self._session_secret()
+        if not secret or not token:
+            return None
+        try:
+            email, exp_s, sig = token.rsplit(":", 2)
+        except ValueError:
+            return None
+        expected = hmac.new(secret.encode(), f"{email}:{exp_s}".encode(),
+                            hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        try:
+            exp = int(exp_s)
+        except ValueError:
+            return None
+        if exp < (now if now is not None else time.time()):
+            return None
+        return email
+
+    def _session_email_from_cookie(self, headers: dict[str, str],
+                                   now: float | None = None) -> str | None:
+        for part in headers.get("cookie", "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "shectory_session" and v:
+                return self._verify_session_token(v, now=now)
+        return None
+
     async def _verify_portal_credentials(self, email: str, password: str) -> bool:
         """Verify credentials against Shectory Portal bridge with positive-cache TTL."""
         key = hashlib.sha256(f"{email.lower()}:{password}".encode("utf-8")).hexdigest()
@@ -1978,6 +2070,49 @@ class ProxyServer:
             f"WWW-Authenticate: Basic realm=\"{realm}\", charset=\"UTF-8\"\r\n"
             f"Content-Type: application/json\r\n"
             f"Content-Length: {len(body)}\r\n\r\n".encode()
+        )
+        wr.write(body)
+        await wr.drain()
+        wr.close()
+
+    async def _raw_api_login(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+    ) -> None:
+        """POST /api/login {email,password} — проверка через portal bridge,
+        на успехе ставит HttpOnly cookie shectory_session (HMAC). Без Basic popup."""
+        headers = await self._read_headers(rd)
+        clen = int(headers.get("content-length", "0") or "0")
+        raw = await asyncio.wait_for(rd.read(min(clen, 8192)), timeout=10) if clen > 0 else b""
+        try:
+            data = json.loads(raw or b"{}")
+            email = str(data.get("email", "")).strip()
+            password = str(data.get("password", ""))
+        except Exception:
+            self._send_simple_and_close(wr, 400, {"error": "bad request"})
+            await wr.drain(); wr.close(); return
+
+        if not email or not password:
+            self._send_simple_and_close(wr, 400, {"error": "Введите e-mail и пароль"})
+            await wr.drain(); wr.close(); return
+        if not self._session_secret():
+            self._send_simple_and_close(wr, 503, {"error": "Сервис авторизации не настроен"})
+            await wr.drain(); wr.close(); return
+
+        ok = await self._verify_portal_credentials(email, password)
+        if not ok:
+            self._send_simple_and_close(wr, 401, {"error": "Неверный e-mail или пароль"})
+            await wr.drain(); wr.close(); return
+
+        token = self._make_session_token(email)
+        body = b'{"ok":true}'
+        wr.write(
+            f"HTTP/1.1 200 OK\r\n"
+            f"Set-Cookie: shectory_session={token}; Path=/; HttpOnly; Secure; "
+            f"SameSite=Lax; Max-Age={7 * 86400}\r\n"
+            f"Content-Type: application/json; charset=utf-8\r\n"
+            f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
         )
         wr.write(body)
         await wr.drain()
