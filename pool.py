@@ -109,7 +109,13 @@ class ProxyPool:
         self._cb_window: float = float(cb_cfg.get("window_secs", 600))
         self._cb_threshold: int = int(cb_cfg.get("error_threshold", 10))
         self._cb_recovery: float = float(cb_cfg.get("recovery_secs", 1800))
-        self._cb_alert_cooldown: float = float(cb_cfg.get("alert_cooldown_secs", 300))
+        # Кулдаун поднят 300→3600с: trip-алерты — низкоценный шум (auto-reset + fallback),
+        # видны в daily-отчёте и дашборде. Не спамить Бориса в ТГ.
+        self._cb_alert_cooldown: float = float(cb_cfg.get("alert_cooldown_secs", 3600))
+        # Хосты, по которым НЕ слать TG-алерт о срыве циркуита (хронически срываются,
+        # fallback=direct работает). api.telegram.org — геороут, прокси её не достают.
+        self._cb_alert_suppress: set[str] = set(
+            cb_cfg.get("alert_suppress_hosts", ["api.telegram.org"]))
         self._last_alert: dict[tuple[str, str], float] = {}
 
         for proxy in pool_config.get("proxies", []):
@@ -279,7 +285,13 @@ class ProxyPool:
         circuit = self._host_circuits.get((proxy_id, host))
         return circuit is not None and circuit.tripped_at > 0
 
+    def _is_alert_suppressed(self, host: str) -> bool:
+        """Хосты, по которым не шлём TG-алерт о срыве циркуита (хронический шум)."""
+        return host in self._cb_alert_suppress
+
     async def _alert_tripped(self, proxy_id: str, host: str, error_count: int) -> None:
+        if self._is_alert_suppressed(host):
+            return  # лог host_circuit_tripped уже записан; в ТГ не спамим
         key = (proxy_id, host)
         now = time.monotonic()
         if now - self._last_alert.get(key, 0.0) < self._cb_alert_cooldown:
