@@ -52,6 +52,13 @@ shectory-portal.service (Next.js на :3000)
 - Forward proxy CONNECT :9090 — без auth (так и было).
 - Federation-only API эндпоинты (`/api/agent/<id>/message`, `/api/signal*`, и т.д.) — на 127.0.0.1:9090 без auth остаются, агенты бьют напрямую/через WG; auth только когда трафик идёт через nginx с Host `dashboard.shectory.ru`.
 
+## Канон федерации (Klod-Access владеет стандартом)
+
+Это Lineman-реализация общего стандарта. Канон + чеклист подключения для ЛЮБОГО сервиса федерации:
+[`docs/PORTAL_AUTH_STANDARD.md`](../../docs/PORTAL_AUTH_STANDARD.md). Туда же направляет
+Keymaster-онбординг (раздел 5.6) и авто-ответчик klod-access (KLOD_CHEATSHEET). Источник истины
+по принципам/RBAC — портальный `CursorRPA/docs/unified-auth-users-rbac-ru.md`.
+
 ## Связь с другими memory
 
 - [03_critical_paths.md](03_critical_paths.md) — добавить `/api/portal-auth-check` и nginx auth_request в список того, что нельзя ломать (если выпадет — потеряем доступ ко всему дашборду).

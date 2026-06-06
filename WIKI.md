@@ -4,7 +4,7 @@
 **Расположение:** smain, `/home/shectory/workspaces/lineman/`  
 **Процесс:** `python3 main.py` (запускается вручную или через systemd user unit)  
 **Порт:** `127.0.0.1:9090`  
-**Публичный дашборд:** [https://dashboard.shectory.ru](https://dashboard.shectory.ru) (Basic Auth: boris / *пароль в .htpasswd*)
+**Публичный дашборд:** [https://dashboard.shectory.ru](https://dashboard.shectory.ru) (вход по единой учётке **Shectory Portal**: username = **email** портала, напр. `bshevelev@mail.ru`; не `boris`)
 
 ---
 
@@ -245,7 +245,7 @@ emit("selfcoder", "github", "error", status="error")
 ## Дашборд (dashboard.shectory.ru)
 
 **URL:** https://dashboard.shectory.ru  
-**Auth:** Basic Auth, логин `boris`  
+**Auth:** единая учётка **Shectory Portal** (Basic-prompt, но проверка через портал, НЕ htpasswd). Username = **email** портала (напр. `bshevelev@mail.ru`, role `admin`), не `boris`. Подробно — раздел [Аутентификация](#аутентификация--стандарт-shectory-portal-bridge) ниже.  
 **Обновление:** сигналы — каждые 3 секунды, топология — каждые 30 секунд
 
 ### Что показывает
@@ -401,7 +401,21 @@ tail -f /tmp/lineman.log
 
 ---
 
-## nginx (dashboard.shectory.ru)
+## Аутентификация — стандарт Shectory Portal (bridge)
+
+Дашборд защищён **единой учёткой Shectory Portal** (общая база `portal_users`, не локальный htpasswd). Старая схема `auth_basic` + `/etc/nginx/.htpasswd-dashboard` **выпилена** (2026-06-05, commit `c6991c8`).
+
+Поток (nginx `auth_request` → Lineman → портал):
+1. Браузер шлёт Basic-кред (**username = email портала**, напр. `bshevelev@mail.ru`).
+2. nginx `auth_request /_portal_auth` → проксирует в Lineman `POST /api/portal-auth-check` (заголовок `Authorization` пробрасывается).
+3. Lineman `_verify_portal_credentials(email, password)` → `POST $SHECTORY_PORTAL_URL/api/internal/verify-portal-credentials`, `Authorization: Bearer $SHECTORY_AUTH_BRIDGE_SECRET`, тело `{email,password}`. Портал сверяет с `portal_users` (bcrypt) → `{ok,email,role,fullName}`.
+4. 2xx → доступ (positive-cache 300с); 401 → nginx отдаёт `WWW-Authenticate Basic realm="Shectory Portal"`.
+
+Env у Lineman (через `run-lineman.sh`/keymaster): `SHECTORY_PORTAL_URL` (на smain = `http://127.0.0.1:3000`), `SHECTORY_AUTH_BRIDGE_SECRET` (тот же, что в `.env` портала; в чат/лог не печатать).
+
+**Это часть единого стандарта аутентификации федерации.** Канон и как подключить свой сервис — [`docs/PORTAL_AUTH_STANDARD.md`](docs/PORTAL_AUTH_STANDARD.md) (там же ссылки на портальный `unified-auth-users-rbac-ru.md` и пример `ourdiary/RUNBOOK.md`).
+
+### nginx (dashboard.shectory.ru)
 
 Файл: `/etc/nginx/sites-available/dashboard.shectory.ru`
 
@@ -409,17 +423,25 @@ tail -f /tmp/lineman.log
 server {
     listen 443 ssl;
     server_name dashboard.shectory.ru;
-    ssl_certificate /etc/letsencrypt/live/dashboard.shectory.ru/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/dashboard.shectory.ru/privkey.pem;
-    auth_basic "Shectory Federation";
-    auth_basic_user_file /etc/nginx/.htpasswd-dashboard;
-    location /      { proxy_pass http://127.0.0.1:9090/dashboard; }
-    location /api/  { proxy_pass http://127.0.0.1:9090/api/; }
+    # ... ssl ...
+    location = /_portal_auth {           # internal: проверка кред через Lineman→портал
+        internal;
+        proxy_pass http://127.0.0.1:9090/api/portal-auth-check;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Authorization $http_authorization;
+    }
+    location @portal_login {
+        add_header WWW-Authenticate 'Basic realm="Shectory Portal", charset="UTF-8"' always;
+        return 401;
+    }
+    location /     { auth_request /_portal_auth; error_page 401 = @portal_login; proxy_pass http://127.0.0.1:9090/dashboard; }
+    location /api/ { auth_request /_portal_auth; error_page 401 = @portal_login; proxy_pass http://127.0.0.1:9090/api/; }
 }
 ```
 
-SSL-сертификат: Let's Encrypt, expires 2026-08-11, auto-renewal через certbot.  
-Пароль: `/etc/nginx/.htpasswd-dashboard` (обновить: `sudo htpasswd /etc/nginx/.htpasswd-dashboard boris`)
+SSL-сертификат: Let's Encrypt, auto-renewal через certbot.  
+**Сброс пароля пользователя** — только в портале (`portal_users`, bcrypt), не в nginx. htpasswd больше не используется.
 
 ---
 

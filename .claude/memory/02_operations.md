@@ -88,7 +88,7 @@ sqlite3 lineman.db ".backup /tmp/lineman.db.backup-$(date +%Y%m%d-%H%M%S)"
 
 ## Дашборд
 
-`https://dashboard.shectory.ru` (Basic Auth: boris / *пароль в `.htpasswd` nginx*). nginx → reverse-proxy на 127.0.0.1:9090 (или :9094, проверить конфиг nginx).
+`https://dashboard.shectory.ru` — вход по **единой учётке Shectory Portal** (username = **email** портала, напр. `bshevelev@mail.ru`; НЕ `boris`, htpasswd выпилен 2026-06-05). nginx `auth_request` → Lineman `/api/portal-auth-check` → portal `verify-portal-credentials`. Детали: [09_portal_auth.md](09_portal_auth.md), канон: [docs/PORTAL_AUTH_STANDARD.md](../../docs/PORTAL_AUTH_STANDARD.md).
 
 При проблемах с SSL:
 ```bash
