@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Билдер — тикеты | Shectory Federation</title>
+  <style>
+    :root{--bg:#0b1220;--panel:#0f172a;--line:#1e293b;--muted:#94a3b8;--text:#e8efff;
+      --accent:#2563eb;--ok:#34d399;--warn:#fbbf24;--err:#f87171;--run:#60a5fa;--gray:#64748b;}
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#16223c 0%,var(--bg) 55%);
+      color:var(--text);font:14px/1.5 Inter,-apple-system,Segoe UI,Roboto,Arial,sans-serif;min-height:100vh}
+    .wrap{max-width:1180px;margin:0 auto;padding:20px 16px}
+    header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+    h1{font-size:20px;margin:0}
+    h1 .sub{color:var(--muted);font-weight:400;font-size:14px}
+    .nav a{color:#7aa2ff;text-decoration:none;font-size:13px;margin-left:14px}
+    .nav a:hover{text-decoration:underline}
+    .upd{color:var(--muted);font-size:12px}
+    .chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+    .chip{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:6px 12px;font-size:13px}
+    .chip b{font-size:15px}
+    .c-queued{color:var(--gray)} .c-running{color:var(--run)} .c-pr_open{color:var(--warn)}
+    .c-merged{color:var(--ok)} .c-failed{color:var(--err)}
+    table{width:100%;border-collapse:collapse;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+    th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top;font-size:13px}
+    th{background:#0d1525;color:var(--muted);font-weight:600;white-space:nowrap}
+    tr:last-child td{border-bottom:0}
+    td.task{max-width:360px;color:#cdd9f0}
+    .badge{display:inline-block;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700}
+    .b-queued{background:#1e293b;color:var(--gray)} .b-running{background:#13294d;color:var(--run)}
+    .b-pr_open{background:#3a2e0a;color:var(--warn)} .b-merged{background:#0c2e22;color:var(--ok)}
+    .b-failed{background:#3a1414;color:var(--err)}
+    .kind-critical{color:var(--err);font-weight:700}
+    .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#9fb3d8}
+    a.pr{color:#7aa2ff}
+    .empty{color:var(--muted);padding:24px;text-align:center}
+    details{margin-top:18px}
+    summary{cursor:pointer;color:var(--muted);font-size:13px}
+    .audit{margin-top:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:#8aa0c4;
+      max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px;background:#0b1220}
+    .audit div{padding:1px 0}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>🏗️ Билдер — тикеты <span class="sub">(klod-builder)</span></h1>
+      <div>
+        <span class="upd" id="upd">…</span>
+        <span class="nav"><a href="/api/klod-chat">💬 Чат с Клодом</a><a href="/">📊 Дашборд</a></span>
+      </div>
+    </header>
+
+    <div class="chips" id="chips"></div>
+
+    <div id="tablewrap"><div class="empty">Загрузка…</div></div>
+
+    <details>
+      <summary>Журнал действий Билдера (audit)</summary>
+      <div class="audit" id="audit"></div>
+    </details>
+  </div>
+
+  <script>
+    const ST = ['queued','running','pr_open','merged','failed'];
+    const LBL = {queued:'в очереди',running:'выполняется',pr_open:'PR/ветка',merged:'смержено',failed:'провал'};
+    const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+    function renderChips(d){
+      const sum = d.summary||{};
+      let h = `<span class="chip">всего <b>${d.total||0}</b></span>`;
+      for(const s of ST){ if(sum[s]) h += `<span class="chip c-${s}">${LBL[s]} <b>${sum[s]}</b></span>`; }
+      for(const k in sum){ if(!ST.includes(k)) h += `<span class="chip">${esc(k)} <b>${sum[k]}</b></span>`; }
+      document.getElementById('chips').innerHTML = h;
+    }
+    function renderTable(d){
+      const ts = d.tickets||[];
+      if(!ts.length){ document.getElementById('tablewrap').innerHTML='<div class="empty">Тикетов нет. Кинь: POST /api/build?repo=&from=</div>'; return; }
+      let rows = ts.map(t=>{
+        const pr = t.pr_url ? `<a class="pr" href="${esc(t.pr_url)}" target="_blank" rel="noopener">PR</a>`
+                  : (t.branch ? `<span class="mono">${esc(t.branch)}</span>` : '—');
+        const kind = t.kind==='critical' ? `<span class="kind-critical">critical</span>` : 'normal';
+        const info = esc(t.tests || t.claude || '');
+        return `<tr>
+          <td class="mono">${esc(t.id)}</td>
+          <td><span class="badge b-${esc(t.status)}">${esc(LBL[t.status]||t.status)}</span></td>
+          <td>${esc(t.repo)}</td>
+          <td>${kind}</td>
+          <td class="task">${esc(t.task)}<div class="mono">${info}</div></td>
+          <td>${pr}</td>
+        </tr>`;
+      }).join('');
+      document.getElementById('tablewrap').innerHTML =
+        `<table><thead><tr><th>id</th><th>статус</th><th>репо</th><th>kind</th><th>задача / результат</th><th>PR/ветка</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+    function renderAudit(d){
+      const a = (d.audit||[]).slice().reverse();
+      document.getElementById('audit').innerHTML = a.map(e=>{
+        const ts=(e.ts||'').replace('T',' ').slice(0,19);
+        return `<div>${esc(ts)} · ${esc(e.event||'')} ${e.ticket?('· '+esc(e.ticket)):''} ${e.status?('→ '+esc(e.status)):''} ${e.kind?('('+esc(e.kind)+')'):''}</div>`;
+      }).join('') || '<div>пусто</div>';
+    }
+    async function load(){
+      try{
+        const r = await fetch('/api/builder/tickets',{cache:'no-store'});
+        const d = await r.json();
+        renderChips(d); renderTable(d); renderAudit(d);
+        document.getElementById('upd').textContent = 'обновлено '+new Date().toLocaleTimeString('ru-RU');
+      }catch(e){ document.getElementById('upd').textContent='нет связи с Lineman'; }
+    }
+    load();
+    setInterval(load, 4000);
+  </script>
+</body>
+</html>

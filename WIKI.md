@@ -244,7 +244,7 @@ emit("selfcoder", "github", "error", status="error")
 
 ## Дашборд (dashboard.shectory.ru)
 
-**URL:** https://dashboard.shectory.ru  
+**URL:** https://dashboard.shectory.ru (главный — топология/токены), `/api/klod-chat` (чат агентов с Клодом), **`/api/builder`** (мониторинг тикетов Билдера: очередь+аудит `~/.builder/`, автообновление 4с; данные — `/api/builder/tickets`).  
 **Auth:** единая учётка **Shectory Portal** (Basic-prompt, но проверка через портал, НЕ htpasswd). Username = **email** портала (напр. `bshevelev@mail.ru`, role `admin`), не `boris`. Подробно — раздел [Аутентификация](#аутентификация--стандарт-shectory-portal-bridge) ниже.  
 **Обновление:** сигналы — каждые 3 секунды, топология — каждые 30 секунд
 

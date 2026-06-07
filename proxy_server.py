@@ -37,6 +37,36 @@ logger = structlog.get_logger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 
+
+def build_builder_status(tickets: list, audit: list) -> dict:
+    """Шейп данных klod-builder для дашборда: сводка по статусам + тикеты (новые сверху)."""
+    summary: dict[str, int] = {}
+    shaped = []
+    for t in tickets:
+        st = t.get("status", "?")
+        summary[st] = summary.get(st, 0) + 1
+        ev = t.get("evidence", {}) or {}
+        repo = (t.get("repo_path", "") or "").rstrip("/")
+        shaped.append({
+            "id": t.get("id", ""),
+            "repo": repo.rsplit("/", 1)[-1] if repo else "",
+            "task": (t.get("task", "") or "")[:120],
+            "kind": t.get("kind", "normal"),
+            "status": st,
+            "branch": t.get("branch", ""),
+            "pr_url": t.get("pr_url", ""),
+            "tests": str(ev.get("tests", ""))[:120],
+            "claude": str(ev.get("claude", ""))[:200],
+            "created_at": t.get("created_at", ""),
+        })
+    shaped.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return {
+        "total": len(tickets),
+        "summary": summary,
+        "tickets": shaped,
+        "audit": audit[-40:],
+    }
+
 # SSH config for remote agents (Federation Agent ID to remote host/agent mapping)
 # IMPORTANT: These SSH keys must be pre-authorized on respective hosts from Lineman's host.
 REMOTE_SSH_CONFIG = {
@@ -456,6 +486,21 @@ class ProxyServer:
                         return
                 await self._raw_dashboard(
                     rd, wr, "klod-chat.html", drain_headers=False
+                )
+            # Мониторинг тикетов Билдера (klod-builder) на дашборде.
+            elif request_path_only == "/api/builder/tickets":
+                await self._raw_api_builder_tickets(rd, wr)
+                return
+            elif request_path_only in ("/builder", "/builder/",
+                                       "/api/builder", "/api/builder/"):
+                headers = await self._read_headers(rd)
+                if not self._session_email_from_cookie(headers):
+                    creds = self._parse_basic_auth(headers)
+                    if not creds or not await self._verify_portal_credentials(*creds):
+                        await self._send_401_basic(wr)
+                        return
+                await self._raw_dashboard(
+                    rd, wr, "builder.html", drain_headers=False
                 )
             elif request_path_only in ("/api/search", "/api/youtube") and method == "GET":
                 # Федеративный web_search / youtube-поиск (keyless, egress Lineman).
@@ -2115,6 +2160,38 @@ class ProxyServer:
             f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
         )
         wr.write(body)
+        await wr.drain()
+        wr.close()
+
+    async def _raw_api_builder_tickets(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+    ) -> None:
+        """GET /api/builder/tickets — очередь + аудит klod-builder для дашборда."""
+        await self._read_headers(rd)
+        qpath = os.path.expanduser(
+            os.environ.get("BUILDER_QUEUE", "~/.builder/queue.json"))
+        apath = os.path.join(os.path.dirname(qpath), "audit.jsonl")
+        try:
+            tickets = json.loads(open(qpath, encoding="utf-8").read()) \
+                if os.path.exists(qpath) else []
+        except Exception:
+            tickets = []
+        audit: list = []
+        if os.path.exists(apath):
+            try:
+                for line in open(apath, encoding="utf-8", errors="replace") \
+                        .read().splitlines()[-60:]:
+                    line = line.strip()
+                    if line:
+                        try:
+                            audit.append(json.loads(line))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        self._send_simple_and_close(wr, 200, build_builder_status(tickets, audit))
         await wr.drain()
         wr.close()
 
