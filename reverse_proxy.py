@@ -245,6 +245,44 @@ _STREAM_TIMEOUT = 180.0
 _BODY_MAX = 4 * 1024 * 1024
 _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503})
 
+# --- Жёсткий дневной кап токенов на провайдера (deepseek жёг миллионы/день) ---
+from datetime import datetime as _dt, timezone as _tz, timedelta as _td  # noqa: E402
+from token_cap import DailyTokenCap  # noqa: E402
+
+_MSK = _tz(_td(hours=3))
+_TOKEN_CAP: DailyTokenCap | None = None
+
+
+def _today_msk() -> str:
+    return _dt.now(_MSK).strftime("%Y-%m-%d")
+
+
+def _get_token_cap(config: dict) -> DailyTokenCap:
+    """Singleton кап из config.reverse_proxy.daily_token_caps, сид из request_log (today)."""
+    global _TOKEN_CAP
+    if _TOKEN_CAP is not None:
+        return _TOKEN_CAP
+    caps = ((config or {}).get("reverse_proxy", {}) or {}).get("daily_token_caps", {}) or {}
+    cap = DailyTokenCap(caps)
+    day = _today_msk()
+    # Сид: рестарт Lineman не должен обнулять дневной расход (иначе кап обходится рестартом).
+    for prov in cap.caps:
+        try:
+            import sqlite3
+            db = (config or {}).get("db_path") or str(BASE_DIR / "lineman.db")
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
+            row = con.execute(
+                "SELECT COALESCE(SUM(COALESCE(tokens_in,0)+COALESCE(tokens_out,0)),0) "
+                "FROM request_log WHERE llm_provider=? AND timestamp >= ?",
+                (prov, day + "T00:00:00")).fetchone()
+            con.close()
+            if row and row[0]:
+                cap.seed(prov, int(row[0]), day)
+        except Exception:
+            pass
+    _TOKEN_CAP = cap
+    return _TOKEN_CAP
+
 # Paths that bypass body buffering — streamed directly to upstream.
 # Used for large uploads (Gemini File API, etc.) where body can exceed _BODY_MAX.
 _PASSTHROUGH_PREFIXES: tuple[str, ...] = (
@@ -463,8 +501,11 @@ async def handle_reverse_proxy(
         req_model = req_json.get("model", "")
         is_streaming = bool(req_json.get("stream", False))
         # Strip "provider/" prefix from model name if present (e.g. "deepseek/deepseek-v4-flash" → "deepseek-v4-flash").
-        # OpenClaw sends composite model strings; upstream APIs expect bare model names.
-        if "/" in req_model and req_body:
+        # OpenClaw sends composite model strings; cloud upstream APIs expect bare model names.
+        # ВАЖНО: для lm-studio НЕ резать — там префикс это ИЗДАТЕЛЬ и часть реального id
+        # модели (напр. "qwen/qwen3.5-9b"). Срезание → LM Studio видит "qwen3.5-9b" и
+        # поднимает ВТОРОЙ дубль-инстанс рядом с загруженным "qwen/qwen3.5-9b".
+        if "/" in req_model and req_body and provider != "lm-studio":
             bare_model = req_model.split("/", 1)[1]
             req_json["model"] = bare_model
             req_body = json.dumps(req_json, ensure_ascii=False).encode("utf-8")
@@ -579,6 +620,18 @@ async def handle_reverse_proxy(
                     pass
             await _send_json_error(writer, 429, f"Circuit breaker: {cb_reason}")
             return
+
+    # Daily token cap per provider — жёсткий потолок (deepseek жёг миллионы/день)
+    _cap = _get_token_cap(config)
+    _day = _today_msk()
+    if not _cap.allow(provider, _day):
+        logger.warning("rproxy_token_cap_blocked", provider=provider, day=_day,
+                       used=_cap.status(_day).get(provider, {}).get("used"))
+        await _send_json_error(
+            writer, 429,
+            f"Дневной лимит токенов провайдера '{provider}' исчерпан на {_day} "
+            f"(контроль траты). Сброс в полночь MSK. См. /api/token-caps.")
+        return
 
     # Dedup cache — check for identical request, record call for retry analysis
     _dedup_key: str | None = None
@@ -841,13 +894,21 @@ async def handle_reverse_proxy(
     if db is not None:
         try:
             from db import source_host_from_ip
+            # Mask individual request header values before JSON-dumping for logging
+            masked_req_headers = {k: _mask_sensitive(v) for k, v in req_headers.items()} if req_headers else None
+            # Учёт потраченных токенов в дневной кап провайдера (жёсткий потолок траты)
+            try:
+                _get_token_cap(config).record(
+                    provider, (tokens_in or 0) + (tokens_out or 0), _today_msk())
+            except Exception:
+                pass
             row = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "source_host": source_host_from_ip(source_ip),
                 "source_agent": agent_name,
                 "llm_provider": provider,
                 "llm_model": req_model,
-                "request_headers_masked": _mask_sensitive(json.dumps(req_headers)) if req_headers else None,
+                "request_headers_masked": _mask_sensitive(json.dumps(masked_req_headers)) if masked_req_headers else None, # Apply mask twice just to be absolutely sure
                 "request_body": _mask_sensitive(req_body.decode("utf-8", errors="replace"))[:4096] if req_body else None,
                 "request_size": len(req_body) if req_body else 0,
                 "tokens_in": tokens_in,

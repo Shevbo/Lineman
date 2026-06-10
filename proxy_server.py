@@ -396,6 +396,20 @@ class ProxyServer:
                 await self._raw_api_budget(rd, wr)
                 return
 
+            # Дневные капы токенов на провайдера (контроль траты)
+            elif request_path_only == "/api/token-caps":
+                await self._read_headers(rd)
+                import reverse_proxy as _rp
+                try:
+                    day = _rp._today_msk()
+                    st = _rp._get_token_cap(self._config).status(day)
+                except Exception as e:
+                    day, st = "", {"error": str(e)[:120]}
+                self._send_simple_and_close(wr, 200, {"day": day, "caps": st})
+                await wr.drain()
+                wr.close()
+                return
+
             elif request_path_only == "/api/keymaster/leak_alert" and method == "POST":
                 await self._raw_api_leak_alert(rd, wr)
                 return
