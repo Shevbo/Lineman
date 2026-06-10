@@ -25,49 +25,43 @@ HTTP_TIMEOUT = 180
 
 # Fallback chain per kind. Worker идёт по списку, пока кто-то не ответит 200.
 # (backend_id, model). backend_id берётся из config.reverse_proxy.upstreams.
+# VRAM-бюджет hyperv: 16GB. Уживаются ОДНОВРЕМЕННО только qwen/qwen3.5-9b (6.1GB,
+# vision+текст, 77 tok/s) + deepseek-r1-14b (8.4GB, reasoning) = 14.5GB < 16GB.
+# Тяжёлая gemma-26b (13GB, 7 tok/s) НЕ помещается ни с чем — убрана из всех
+# LM Studio маршрутов. Всё лёгкое и vision → qwen/qwen3.5-9b, рассуждения → deepseek-r1.
+# llama3.2:1b и deepseek-flash/pro живут на других backend-ах (не жрут hyperv VRAM).
+# ПОЛИТИКА ЭКОНОМИИ (2026-06-10): lazy_queue = ТОЛЬКО бесплатные локальные бэкенды
+# (lm-studio/ollama-hoster, вкл. локальный deepseek-r1 на lm-studio). Платный deepseek
+# (API) УБРАН из всех fallback — «бездарные краны» (federation_sweep и т.п.) больше НЕ
+# текут молча в платный deepseek. Нужна умная модель → агент идёт ЯВНЫМ роутом
+# (/proxy/deepseek с X-Lineman-Route think), а не молчаливым lazy-фолбэком. Если все
+# локальные бэкенды недоступны — job остаётся queued/retry (не платим).
 ROUTES: dict[str, list[tuple[str, str]]] = {
-    "tune":      [("lm-studio", "google/gemma-4-e4b"),
-                  ("ollama-hoster", "llama3.2:1b"),
-                  ("deepseek", "deepseek-v4-flash")],
+    "tune":      [("lm-studio", "qwen/qwen3.5-9b"),
+                  ("ollama-hoster", "llama3.2:1b")],
     "eval":      [("ollama-hoster", "llama3.2:1b"),
-                  ("lm-studio", "google/gemma-4-e4b"),
-                  ("deepseek", "deepseek-v4-flash")],
+                  ("lm-studio", "qwen/qwen3.5-9b")],
     "lint":      [("ollama-hoster", "llama3.2:1b"),
-                  ("lm-studio", "google/gemma-4-e4b")],
-    "html":      [("lm-studio", "gemma-4-26b-a4b-it-imatrix"),
-                  ("deepseek", "deepseek-v4-flash")],
-    "css":       [("lm-studio", "gemma-4-26b-a4b-it-imatrix"),
-                  ("deepseek", "deepseek-v4-flash")],
-    "summarise": [("lm-studio", "gemma-4-26b-a4b-it-imatrix"),
-                  ("deepseek", "deepseek-v4-flash")],
-    "critique":  [("lm-studio", "gemma-4-26b-a4b-it-imatrix"),
-                  ("deepseek", "deepseek-v4-flash")],
-    "reason":    [("lm-studio", "deepseek-r1-distill-qwen-14b"),
-                  ("deepseek", "deepseek-v4-pro")],
-    # sweep-варианты (federation_sweep.py)
-    "sweep_doc":      [("lm-studio", "gemma-4-26b-a4b-it-imatrix"),
-                       ("ollama-hoster", "llama3.2:1b")],
-    "sweep_deadcode": [("lm-studio", "gemma-4-26b-a4b-it-imatrix")],
-    "sweep_secsan":   [("lm-studio", "deepseek-r1-distill-qwen-14b")],
-    "sweep_hardcode": [("lm-studio", "google/gemma-4-e4b"),
-                       ("ollama-hoster", "llama3.2:1b")],
-    "sweep_leaks":    [("lm-studio", "google/gemma-4-e4b"),
-                       ("ollama-hoster", "llama3.2:1b")],
-    # task-split: разбиение большой задачи на N мелких — нужен chain-of-thought,
-    # лучше через большую gemma или DeepSeek-pro.
-    "task-split":     [("lm-studio", "gemma-4-26b-a4b-it-imatrix"),
-                       ("deepseek", "deepseek-v4-pro")],
-    # Vision/multimodal: gemma-4-e4b-it на LM Studio принимает image_url
-    # OpenAI-vision format. Идеально для тяжёлых задач 'опиши', 'извлеки',
-    # OCR, captioning без оплаты Gemini Vision.
-    "vision":   [("lm-studio", "gemma-4-e4b-it")],
-    "ocr":      [("lm-studio", "gemma-4-e4b-it")],
-    "caption":  [("lm-studio", "gemma-4-e4b-it")],
-    "describe": [("lm-studio", "gemma-4-e4b-it")],
+                  ("lm-studio", "qwen/qwen3.5-9b")],
+    "html":      [("lm-studio", "qwen/qwen3.5-9b")],
+    "css":       [("lm-studio", "qwen/qwen3.5-9b")],
+    "summarise": [("lm-studio", "qwen/qwen3.5-9b")],
+    "critique":  [("lm-studio", "qwen/qwen3.5-9b")],
+    "reason":    [("lm-studio", "deepseek-r1-distill-qwen-14b")],  # локальный, бесплатно
+    # sweep-варианты (federation_sweep.py, cron каждые 10 мин) — только ollama-hoster.
+    "sweep_doc":      [("ollama-hoster", "llama3.2:1b")],
+    "sweep_deadcode": [("ollama-hoster", "llama3.2:1b")],
+    "sweep_secsan":   [("ollama-hoster", "llama3.2:1b")],
+    "sweep_hardcode": [("ollama-hoster", "llama3.2:1b")],
+    "sweep_leaks":    [("ollama-hoster", "llama3.2:1b")],
+    "task-split":     [("lm-studio", "qwen/qwen3.5-9b")],
+    "vision":   [("lm-studio", "qwen/qwen3.5-9b")],
+    "ocr":      [("lm-studio", "qwen/qwen3.5-9b")],
+    "caption":  [("lm-studio", "qwen/qwen3.5-9b")],
+    "describe": [("lm-studio", "qwen/qwen3.5-9b")],
 }
 DEFAULT_ROUTE = [("ollama-hoster", "llama3.2:1b"),
-                 ("lm-studio", "google/gemma-4-e4b"),
-                 ("deepseek", "deepseek-v4-flash")]
+                 ("lm-studio", "qwen/qwen3.5-9b")]
 
 # Local backends = zero cost. Если job ушёл на один из них вместо платного,
 # считаем экономию относительно baseline-цены (deepseek-v4-flash по умолчанию,
