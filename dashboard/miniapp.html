@@ -44,19 +44,46 @@
   .tk .info{margin-top:4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#9fb3d8}
   .tk a{color:#7aa2ff}
   .empty{color:var(--muted);text-align:center;padding:40px}
+  /* backlog */
+  .blform{display:flex;flex-direction:column;gap:7px;margin-bottom:12px}
+  .blform input,.blform textarea{background:var(--panel);border:1px solid var(--line);
+    border-radius:8px;color:var(--txt);padding:9px 11px;font:14px inherit;width:100%}
+  .blform button{background:var(--run);border:0;border-radius:8px;color:#04101f;
+    font-weight:700;padding:10px;font-size:14px}
+  .bl{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:10px;margin:8px 0}
+  .bl .t{font-weight:600}
+  .bl .n{color:var(--muted);font-size:12px;margin-top:3px;white-space:pre-wrap}
+  .bl .st{font-size:11px;color:var(--muted);margin-top:4px}
+  .bl .act{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .bl .act button{background:transparent;border:1px solid var(--line);border-radius:7px;
+    color:var(--txt);padding:5px 10px;font-size:12px}
+  .bl .act button.go{border-color:var(--run);color:var(--run)}
+  .bl .act button.done{border-color:var(--ok);color:var(--ok)}
+  .bl.s-sent{opacity:.75} .bl.s-done{opacity:.45}
 </style>
 </head>
 <body>
 <header>
   <div class="tabs">
-    <div class="tab on" id="t-chat" onclick="show('chat')">💬 Чаты агентов</div>
-    <div class="tab" id="t-tk" onclick="show('tk')">🏗️ Тикеты Билдера</div>
+    <div class="tab on" id="t-chat" onclick="show('chat')">💬 Чаты</div>
+    <div class="tab" id="t-tk" onclick="show('tk')">🏗️ Тикеты</div>
+    <div class="tab" id="t-bl" onclick="show('bl')">📋 Бэклог</div>
   </div>
   <div class="meta" id="meta">подключение…</div>
 </header>
 <main>
   <div id="view-chat"><div class="empty">загрузка…</div></div>
   <div id="view-tk" class="hide"><div class="chips" id="chips"></div><div id="tklist"></div></div>
+  <div id="view-bl" class="hide">
+    <div class="blform">
+      <input id="bl-title" placeholder="Задача в бэклог…" maxlength="300">
+      <input id="bl-repo" placeholder="repo (напр. infra/lineman) — для отправки Билдеру" maxlength="120">
+      <textarea id="bl-note" placeholder="детали (необязательно)" rows="2"></textarea>
+      <button onclick="addBl()">＋ Добавить</button>
+    </div>
+    <div class="chips" id="bl-chips"></div>
+    <div id="bllist"></div>
+  </div>
 </main>
 <script>
 const TG = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
@@ -67,10 +94,10 @@ const LBL = {queued:'в очереди',running:'выполняется',pr_open
 const ST = ['queued','running','pr_open','merged','failed'];
 
 function show(v){ cur=v;
-  document.getElementById('t-chat').classList.toggle('on',v==='chat');
-  document.getElementById('t-tk').classList.toggle('on',v==='tk');
-  document.getElementById('view-chat').classList.toggle('hide',v!=='chat');
-  document.getElementById('view-tk').classList.toggle('hide',v!=='tk');
+  for(const [id,val] of [['t-chat','chat'],['t-tk','tk'],['t-bl','bl']])
+    document.getElementById(id).classList.toggle('on',v===val);
+  for(const [id,val] of [['view-chat','chat'],['view-tk','tk'],['view-bl','bl']])
+    document.getElementById(id).classList.toggle('hide',v!==val);
   refresh();
 }
 async function getJson(u){ try{ const r=await fetch(u,{cache:'no-store',credentials:'same-origin'}); if(!r.ok) return null; return await r.json(); }catch(e){ return null; } }
@@ -121,11 +148,51 @@ async function loadTk(){
   }).join('') : '<div class="empty">тикетов нет</div>';
   document.getElementById('meta').textContent = `тикетов ${d.total||0} · ${new Date().toLocaleTimeString('ru-RU',{timeZone:'Europe/Moscow'})} MSK`;
 }
-async function refresh(){ if(!authed) return; if(cur==='chat') await loadChat(); else await loadTk(); }
+const BLST = {new:'новое',sent:'у Билдера',done:'готово'};
+async function post(u,obj){ try{ const r=await fetch(u,{method:'POST',credentials:'same-origin',
+  headers:{'Content-Type':'application/json'},body:JSON.stringify(obj||{})}); return r.ok?await r.json():null; }catch(e){ return null; } }
+async function loadBl(){
+  const d = await getJson('/api/backlog');
+  if(!d){ document.getElementById('bllist').innerHTML='<div class="empty">нет связи</div>'; return; }
+  const sum=d.summary||{}; let ch='';
+  for(const s of ['new','sent','done']){ if(sum[s]) ch+=`<span class="chip">${BLST[s]} <b>${sum[s]}</b></span>`; }
+  document.getElementById('bl-chips').innerHTML=ch;
+  const items=(d.items||[]).slice().reverse();
+  document.getElementById('bllist').innerHTML = items.length ? items.map(it=>{
+    const st=it.status||'new';
+    const acts = st==='done' ? '' :
+      `<div class="act">${st==='new'?`<button class="go" onclick="promo('${it.id}','${esc(it.repo||'')}')">→ Билдер</button>`:''}`
+      +`<button class="done" onclick="mark('${it.id}','done')">✓ готово</button>`
+      +`<button onclick="del('${it.id}')">✕</button></div>`;
+    return `<div class="bl s-${st}"><div class="t">${esc(it.title)}</div>`
+      +`${it.note?`<div class="n">${esc(it.note)}</div>`:''}`
+      +`<div class="st">${BLST[st]||st}${it.repo?(' · '+esc(it.repo)):''}${it.ticket_id?(' · тикет '+esc(it.ticket_id)):''}</div>${acts}</div>`;
+  }).join('') : '<div class="empty">бэклог пуст</div>';
+  document.getElementById('meta').textContent = `бэклог: ${(d.total||0)} · ${new Date().toLocaleTimeString('ru-RU',{timeZone:'Europe/Moscow'})} MSK`;
+}
+async function addBl(){
+  const title=document.getElementById('bl-title').value.trim(); if(!title) return;
+  const repo=document.getElementById('bl-repo').value.trim();
+  const note=document.getElementById('bl-note').value.trim();
+  const r=await post('/api/backlog',{title,repo,note});
+  if(r&&r.ok){ document.getElementById('bl-title').value=''; document.getElementById('bl-note').value=''; loadBl(); }
+}
+async function promo(id,repo){
+  let r=repo; if(!r){ r=prompt('repo для Билдера (напр. infra/lineman):',''); if(!r) return; }
+  const res=await post('/api/backlog/promote',{id,repo:r});
+  if(res&&res.ok){ if(TG&&TG.HapticFeedback) TG.HapticFeedback.notificationOccurred('success'); loadBl(); }
+  else if(res===null){ alert('не удалось отправить'); }
+}
+async function mark(id,status){ const r=await post('/api/backlog/status',{id,status}); if(r&&r.ok) loadBl(); }
+async function del(id){ const r=await post('/api/backlog/remove',{id}); if(r) loadBl(); }
+
+async function refresh(){ if(!authed) return; if(cur==='chat') await loadChat(); else if(cur==='tk') await loadTk(); else await loadBl(); }
 
 async function boot(){
   if(TG){ TG.ready(); TG.expand(); }
-  if(await auth()){ await refresh(); setInterval(refresh, 4000); }
+  // В Telegram — вход по initData. В браузере (дашборд) — полагаемся на portal cookie-сессию.
+  const ok = (TG && TG.initData) ? await auth() : true;
+  if(ok){ authed = true; await refresh(); setInterval(refresh, 4000); }
 }
 boot();
 </script>

@@ -33,6 +33,7 @@ from reverse_proxy import handle_reverse_proxy
 from circuit_breaker import CircuitBreaker
 from dedup_cache import DedupCache
 from tg_miniapp import validate_init_data, user_id_allowed
+from backlog import BacklogStore, enqueue_builder_ticket
 
 logger = structlog.get_logger(__name__)
 
@@ -509,6 +510,15 @@ class ProxyServer:
                 await self._raw_dashboard(
                     rd, wr, "klod-chat.html", drain_headers=False
                 )
+            # Та же миниаппа (чаты+тикеты+бэклог) через дашборд по cookie-сессии (вне Telegram).
+            elif request_path_only in ("/klod", "/klod/"):
+                headers = await self._read_headers(rd)
+                if not self._session_email_from_cookie(headers):
+                    creds = self._parse_basic_auth(headers)
+                    if not creds or not await self._verify_portal_credentials(*creds):
+                        await self._send_401_basic(wr)
+                        return
+                await self._raw_dashboard(rd, wr, "miniapp.html", drain_headers=False)
             # Мониторинг тикетов Билдера (klod-builder) на дашборде.
             elif request_path_only == "/api/builder/tickets":
                 await self._raw_api_builder_tickets(rd, wr)
@@ -530,6 +540,10 @@ class ProxyServer:
             elif request_path_only == "/api/build" and method == "POST":
                 # Постановка тикета Билдеру (klod-builder очередь).
                 await self._raw_api_build(rd, wr, request_path)
+                return
+            elif request_path_only.startswith("/api/backlog"):
+                # Трекер бэклога Клода (#7): список/добавить/промоут в Билдер/статус.
+                await self._raw_api_backlog(rd, wr, request_path, method)
                 return
 
             # Reverse proxy: /proxy/{provider}/... — plaintext body inspection
@@ -1968,6 +1982,81 @@ class ProxyServer:
             return self._send_simple_and_close(wr, 500, {"error": str(e)[:200]})
         logger.info("builder_ticket", id=tid, repo=repo, from_=frm)
         self._send_simple_and_close(wr, 200, {"status": "ok", "id": tid, "queued": len(items)})
+
+    async def _raw_api_backlog(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        request_path: str,
+        method: str,
+    ) -> None:
+        """Трекер бэклога Клода (#7). За cookie-сессией (nginx /api/).
+          GET  /api/backlog                  → {items, summary, total}
+          POST /api/backlog        {title,note,repo,priority}  → добавить
+          POST /api/backlog/promote {id,repo?}                 → тикет Билдеру + статус sent
+          POST /api/backlog/status  {id,status}                → сменить статус
+          POST /api/backlog/remove  {id}                       → удалить
+        """
+        from urllib.parse import urlparse
+        headers = await self._read_headers(rd)
+        clen = int(headers.get("content-length", "0") or "0")
+        raw = await asyncio.wait_for(rd.read(min(clen, 65536)), timeout=10) if clen > 0 else b""
+        path = urlparse(request_path).path.rstrip("/") or "/api/backlog"
+        try:
+            body = json.loads(raw) if raw else {}
+            if not isinstance(body, dict):
+                body = {}
+        except Exception:
+            body = {}
+
+        store = BacklogStore(os.environ.get("KLOD_BACKLOG", "~/.klod/backlog.json"))
+
+        if method == "GET" and path == "/api/backlog":
+            items = store.list()
+            return self._send_simple_and_close(
+                wr, 200, {"items": items, "summary": store.summary(), "total": len(items)})
+
+        if method == "POST" and path == "/api/backlog":
+            try:
+                it = store.add(str(body.get("title", "")), note=str(body.get("note", "")),
+                               repo=str(body.get("repo", "")),
+                               priority=str(body.get("priority", "normal")))
+            except ValueError as e:
+                return self._send_simple_and_close(wr, 400, {"error": str(e)})
+            return self._send_simple_and_close(wr, 200, {"ok": True, "item": it})
+
+        if method == "POST" and path == "/api/backlog/promote":
+            it = store.get(str(body.get("id", "")))
+            if not it:
+                return self._send_simple_and_close(wr, 404, {"error": "not found"})
+            repo = str(body.get("repo", "") or it.get("repo", "")).strip()
+            if not repo:
+                return self._send_simple_and_close(wr, 400, {"error": "нужен repo"})
+            task = it["title"] + (("\n\n" + it["note"]) if it.get("note") else "")
+            try:
+                tid = enqueue_builder_ticket(
+                    os.environ.get("BUILDER_QUEUE", "~/.builder/queue.json"),
+                    repo, task, frm="klod-backlog")
+            except Exception as e:
+                return self._send_simple_and_close(wr, 500, {"error": str(e)[:200]})
+            store.set_status(it["id"], "sent", ticket_id=tid)
+            logger.info("backlog_promote", id=it["id"], ticket=tid, repo=repo)
+            return self._send_simple_and_close(wr, 200, {"ok": True, "ticket_id": tid})
+
+        if method == "POST" and path == "/api/backlog/status":
+            try:
+                upd = store.set_status(str(body.get("id", "")), str(body.get("status", "")))
+            except ValueError as e:
+                return self._send_simple_and_close(wr, 400, {"error": str(e)})
+            if not upd:
+                return self._send_simple_and_close(wr, 404, {"error": "not found"})
+            return self._send_simple_and_close(wr, 200, {"ok": True, "item": upd})
+
+        if method == "POST" and path == "/api/backlog/remove":
+            ok = store.remove(str(body.get("id", "")))
+            return self._send_simple_and_close(wr, 200 if ok else 404, {"ok": ok})
+
+        return self._send_simple_and_close(wr, 400, {"error": "bad backlog request"})
 
     async def _raw_api_search(
         self,
