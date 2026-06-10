@@ -68,6 +68,7 @@
     <div class="tab on" id="t-chat" onclick="show('chat')">💬 Чаты</div>
     <div class="tab" id="t-tk" onclick="show('tk')">🏗️ Тикеты</div>
     <div class="tab" id="t-bl" onclick="show('bl')">📋 Бэклог</div>
+    <div class="tab" id="t-wd" onclick="show('wd')">🛡 Стандарты</div>
   </div>
   <div class="meta" id="meta">подключение…</div>
 </header>
@@ -84,6 +85,7 @@
     <div class="chips" id="bl-chips"></div>
     <div id="bllist"></div>
   </div>
+  <div id="view-wd" class="hide"><div id="wdbody"><div class="empty">загрузка…</div></div></div>
 </main>
 <script>
 const TG = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
@@ -94,9 +96,9 @@ const LBL = {queued:'в очереди',running:'выполняется',pr_open
 const ST = ['queued','running','pr_open','merged','failed'];
 
 function show(v){ cur=v;
-  for(const [id,val] of [['t-chat','chat'],['t-tk','tk'],['t-bl','bl']])
+  for(const [id,val] of [['t-chat','chat'],['t-tk','tk'],['t-bl','bl'],['t-wd','wd']])
     document.getElementById(id).classList.toggle('on',v===val);
-  for(const [id,val] of [['view-chat','chat'],['view-tk','tk'],['view-bl','bl']])
+  for(const [id,val] of [['view-chat','chat'],['view-tk','tk'],['view-bl','bl'],['view-wd','wd']])
     document.getElementById(id).classList.toggle('hide',v!==val);
   refresh();
 }
@@ -186,7 +188,24 @@ async function promo(id,repo){
 async function mark(id,status){ const r=await post('/api/backlog/status',{id,status}); if(r&&r.ok) loadBl(); }
 async function del(id){ const r=await post('/api/backlog/remove',{id}); if(r) loadBl(); }
 
-async function refresh(){ if(!authed) return; if(cur==='chat') await loadChat(); else if(cur==='tk') await loadTk(); else await loadBl(); }
+const SEVC = {high:'var(--err)',medium:'var(--warn)',low:'var(--muted)'};
+async function loadWd(){
+  const d = await getJson('/api/watchdog');
+  const el = document.getElementById('wdbody');
+  if(!d){ el.innerHTML='<div class="empty">нет связи</div>'; return; }
+  const vs = d.violations||[];
+  let head = d.ok ? '<div class="bl s-done" style="opacity:1;border-color:var(--ok)"><div class="t" style="color:var(--ok)">✓ Нарушений нет</div>'
+    +`<div class="st">проверка: ${esc(d.generated||'')}</div></div>`
+    : `<div class="chips">${Object.entries(d.by_severity||{}).map(([s,n])=>`<span class="chip" style="color:${SEVC[s]||''}">${esc(s)} <b>${n}</b></span>`).join('')}</div>`;
+  let list = vs.map(v=>`<div class="bl"><div class="t" style="color:${SEVC[v.severity]||''}">[${esc(v.severity)}] ${esc(v.check)}</div>`
+    +`<div class="n">${esc(v.path)} — ${esc(v.detail)}</div></div>`).join('');
+  el.innerHTML = head + list;
+  document.getElementById('meta').textContent = `вотчдог: ${d.total||0} нарушений · ${esc(d.generated||'')}`;
+}
+
+async function refresh(){ if(!authed) return;
+  if(cur==='chat') await loadChat(); else if(cur==='tk') await loadTk();
+  else if(cur==='bl') await loadBl(); else await loadWd(); }
 
 async function boot(){
   if(TG){ TG.ready(); TG.expand(); }

@@ -545,6 +545,10 @@ class ProxyServer:
                 # Трекер бэклога Клода (#7): список/добавить/промоут в Билдер/статус.
                 await self._raw_api_backlog(rd, wr, request_path, method)
                 return
+            elif request_path_only in ("/api/watchdog", "/api/watchdog/"):
+                # Вотчдог Клода (#4): последний отчёт проверок стандартов/секретов/доков.
+                await self._raw_api_watchdog(rd, wr)
+                return
 
             # Reverse proxy: /proxy/{provider}/... — plaintext body inspection
             elif request_path_only.startswith("/proxy/"):
@@ -2057,6 +2061,23 @@ class ProxyServer:
             return self._send_simple_and_close(wr, 200 if ok else 404, {"ok": ok})
 
         return self._send_simple_and_close(wr, 400, {"error": "bad backlog request"})
+
+    async def _raw_api_watchdog(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+    ) -> None:
+        """GET /api/watchdog — последний отчёт вотчдога Клода (#4) из ~/.klod/watchdog.json."""
+        await self._read_headers(rd)
+        path = os.path.expanduser(
+            os.environ.get("KLOD_WATCHDOG_REPORT", "~/.klod/watchdog.json"))
+        rep = {"ok": None, "total": 0, "by_severity": {}, "violations": [], "generated": ""}
+        try:
+            if os.path.exists(path):
+                rep = json.loads(open(path, encoding="utf-8").read())
+        except Exception:
+            pass
+        return self._send_simple_and_close(wr, 200, rep)
 
     async def _raw_api_search(
         self,

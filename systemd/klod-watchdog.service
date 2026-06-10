@@ -1,0 +1,8 @@
+[Unit]
+Description=Вотчдог Клода (#4) — проверки стандартов/секретов/доков федерации
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/shectory/workspaces/infra/lineman
+ExecStart=/home/shectory/workspaces/infra/lineman/.venv/bin/python3 scripts/klod_watchdog.py

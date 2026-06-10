@@ -1,0 +1,10 @@
+[Unit]
+Description=Почасовой запуск вотчдога Клода (#4)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
