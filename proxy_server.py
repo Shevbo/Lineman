@@ -32,6 +32,7 @@ from _http_raw import handle_tunnel, handle_http
 from reverse_proxy import handle_reverse_proxy
 from circuit_breaker import CircuitBreaker
 from dedup_cache import DedupCache
+from tg_miniapp import validate_init_data, user_id_allowed
 
 logger = structlog.get_logger(__name__)
 
@@ -440,6 +441,13 @@ class ProxyServer:
                 return
             elif request_path_only == "/api/login" and method == "POST":
                 await self._raw_api_login(rd, wr)
+                return
+            # Telegram Mini App Клода: страница (без auth — бутстрап) + initData-вход.
+            elif request_path_only in ("/miniapp", "/miniapp/"):
+                await self._raw_dashboard(rd, wr, "miniapp.html")
+                return
+            elif request_path_only == "/api/tg/miniapp-auth" and method == "POST":
+                await self._raw_api_miniapp_auth(rd, wr)
                 return
             # nginx auth_request: 200 если валидна cookie-сессия, 401 иначе (без popup).
             elif request_path_only == "/api/session-check":
@@ -2170,6 +2178,49 @@ class ProxyServer:
             f"HTTP/1.1 200 OK\r\n"
             f"Set-Cookie: shectory_session={token}; Path=/; HttpOnly; Secure; "
             f"SameSite=Lax; Max-Age={7 * 86400}\r\n"
+            f"Content-Type: application/json; charset=utf-8\r\n"
+            f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+        )
+        wr.write(body)
+        await wr.drain()
+        wr.close()
+
+    async def _raw_api_miniapp_auth(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+    ) -> None:
+        """POST /api/tg/miniapp-auth {initData} — валидирует Telegram initData ключом
+        KLOD_BOT_TOKEN, сверяет user.id с allowlist, ставит session cookie (как /api/login).
+        SameSite=None — миниаппа живёт во webview Telegram (third-party контекст)."""
+        headers = await self._read_headers(rd)
+        clen = int(headers.get("content-length", "0") or "0")
+        raw = await asyncio.wait_for(rd.read(min(clen, 8192)), timeout=10) if clen > 0 else b""
+        try:
+            data = json.loads(raw or b"{}")
+            init_data = str(data.get("initData", ""))
+        except Exception:
+            self._send_simple_and_close(wr, 400, {"error": "bad request"})
+            await wr.drain(); wr.close(); return
+
+        bot_token = (os.environ.get("KLOD_BOT_TOKEN") or "").strip()
+        if not bot_token or not self._session_secret():
+            self._send_simple_and_close(wr, 503, {"error": "miniapp не настроен"})
+            await wr.drain(); wr.close(); return
+
+        allowed = {x for x in os.environ.get("KLOD_MINIAPP_ALLOW", "36910539").split(",") if x}
+        parsed = validate_init_data(init_data, bot_token)
+        if not user_id_allowed(parsed, allowed):
+            self._send_simple_and_close(wr, 403, {"error": "forbidden"})
+            await wr.drain(); wr.close(); return
+
+        uid = str(parsed["user"]["id"])
+        token = self._make_session_token(f"telegram:{uid}")
+        body = b'{"ok":true}'
+        wr.write(
+            f"HTTP/1.1 200 OK\r\n"
+            f"Set-Cookie: shectory_session={token}; Path=/; HttpOnly; Secure; "
+            f"SameSite=None; Max-Age={7 * 86400}\r\n"
             f"Content-Type: application/json; charset=utf-8\r\n"
             f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
         )

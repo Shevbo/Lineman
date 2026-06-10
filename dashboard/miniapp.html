@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Клод — федерация</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{ --bg:#0d1117; --panel:#161b22; --line:#30363d; --txt:#e6edf3; --muted:#8b949e;
+    --agent:#1f6feb22; --claude:#2ea04322; --agent-b:#388bfd; --claude-b:#3fb950;
+    --ok:#3fb950; --warn:#d29922; --err:#f85149; --run:#58a6ff; --gray:#6e7681; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    padding-bottom:env(safe-area-inset-bottom)}
+  header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line)}
+  .tabs{display:flex}
+  .tab{flex:1;text-align:center;padding:12px 8px;font-size:14px;color:var(--muted);
+    cursor:pointer;border-bottom:2px solid transparent;user-select:none}
+  .tab.on{color:var(--txt);border-bottom-color:var(--run);font-weight:600}
+  .meta{font-size:11px;color:var(--muted);text-align:center;padding:4px}
+  main{padding:10px 12px}
+  .hide{display:none}
+  /* chat */
+  .row{display:flex;margin:9px 0}
+  .row.agent{justify-content:flex-start} .row.claude{justify-content:flex-end}
+  .bubble{max-width:84%;padding:8px 11px;border-radius:12px;white-space:pre-wrap;
+    word-break:break-word;border:1px solid var(--line)}
+  .agent .bubble{background:var(--agent);border-left:3px solid var(--agent-b)}
+  .claude .bubble{background:var(--claude);border-right:3px solid var(--claude-b)}
+  .who{font-size:11px;color:var(--muted);margin-bottom:3px}.who b{color:var(--txt)}
+  .kind{font-size:10px;padding:1px 6px;border-radius:8px;background:var(--line);color:var(--muted);margin-left:6px}
+  /* tickets */
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  .chip{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:5px 10px;font-size:12px}
+  .chip b{font-size:14px}
+  .tk{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:10px;margin:8px 0}
+  .tk .top{display:flex;justify-content:space-between;gap:8px;align-items:center}
+  .badge{display:inline-block;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700}
+  .b-queued{background:#1e293b;color:var(--gray)} .b-running{background:#13294d;color:var(--run)}
+  .b-pr_open{background:#3a2e0a;color:var(--warn)} .b-merged{background:#0c2e22;color:var(--ok)}
+  .b-failed{background:#3a1414;color:var(--err)}
+  .tk .repo{font-size:11px;color:var(--muted)} .tk .task{margin-top:6px;color:#cdd9f0}
+  .tk .info{margin-top:4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#9fb3d8}
+  .tk a{color:#7aa2ff}
+  .empty{color:var(--muted);text-align:center;padding:40px}
+</style>
+</head>
+<body>
+<header>
+  <div class="tabs">
+    <div class="tab on" id="t-chat" onclick="show('chat')">💬 Чаты агентов</div>
+    <div class="tab" id="t-tk" onclick="show('tk')">🏗️ Тикеты Билдера</div>
+  </div>
+  <div class="meta" id="meta">подключение…</div>
+</header>
+<main>
+  <div id="view-chat"><div class="empty">загрузка…</div></div>
+  <div id="view-tk" class="hide"><div class="chips" id="chips"></div><div id="tklist"></div></div>
+</main>
+<script>
+const TG = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+let authed = false, cur = 'chat';
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = ts => { try{ return new Date(ts).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); }catch(e){ return ts||''; } };
+const LBL = {queued:'в очереди',running:'выполняется',pr_open:'PR/ветка',merged:'смержено',failed:'провал'};
+const ST = ['queued','running','pr_open','merged','failed'];
+
+function show(v){ cur=v;
+  document.getElementById('t-chat').classList.toggle('on',v==='chat');
+  document.getElementById('t-tk').classList.toggle('on',v==='tk');
+  document.getElementById('view-chat').classList.toggle('hide',v!=='chat');
+  document.getElementById('view-tk').classList.toggle('hide',v!=='tk');
+  refresh();
+}
+async function getJson(u){ try{ const r=await fetch(u,{cache:'no-store',credentials:'same-origin'}); if(!r.ok) return null; return await r.json(); }catch(e){ return null; } }
+
+async function auth(){
+  const initData = TG ? TG.initData : '';
+  if(!initData){ document.getElementById('meta').textContent='открой через кнопку бота Klod'; return false; }
+  try{
+    const r = await fetch('/api/tg/miniapp-auth',{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({initData})});
+    authed = r.ok;
+    if(!authed){ document.getElementById('meta').textContent = r.status===403?'доступ только владельцу':'ошибка входа ('+r.status+')'; }
+    return authed;
+  }catch(e){ document.getElementById('meta').textContent='нет связи'; return false; }
+}
+
+async function loadChat(){
+  const [inb,out] = await Promise.all([
+    getJson('/api/agent/klod-access/inbox?since=0&limit=300'),
+    getJson('/api/agent/klod-access/outbox?since=0&limit=300')]);
+  const items=[];
+  (inb&&inb.messages||[]).forEach(m=>items.push({side:'agent',id:m.id,ts:m.ts,
+    who:(m.from||'?')+(m.node?('@'+m.node):''),kind:(m.meta&&m.meta.kind)||'',text:m.message}));
+  (out&&out.messages||[]).forEach(m=>items.push({side:'claude',id:m.id,ts:m.ts,
+    who:'→ '+(m.to||'?'),kind:m.in_reply_to?('reply #'+m.in_reply_to):'',text:m.message}));
+  items.sort((a,b)=>(a.id||0)-(b.id||0));
+  const el=document.getElementById('view-chat');
+  el.innerHTML = items.length ? items.map(it=>
+    `<div class="row ${it.side}"><div class="bubble"><div class="who"><b>${esc(it.who)}</b> · #${it.id} · ${fmt(it.ts)}`
+    +`${it.kind?`<span class="kind">${esc(it.kind)}</span>`:''}</div>${esc(it.text)}</div></div>`).join('')
+    : '<div class="empty">пока пусто</div>';
+  document.getElementById('meta').textContent = `${items.length} сообщений · ${new Date().toLocaleTimeString('ru-RU',{timeZone:'Europe/Moscow'})} MSK`;
+}
+async function loadTk(){
+  const d = await getJson('/api/builder/tickets');
+  if(!d){ document.getElementById('tklist').innerHTML='<div class="empty">нет связи</div>'; return; }
+  const sum=d.summary||{}; let ch=`<span class="chip">всего <b>${d.total||0}</b></span>`;
+  for(const s of ST){ if(sum[s]) ch+=`<span class="chip">${LBL[s]} <b>${sum[s]}</b></span>`; }
+  document.getElementById('chips').innerHTML=ch;
+  const ts=d.tickets||[];
+  document.getElementById('tklist').innerHTML = ts.length ? ts.map(t=>{
+    const pr = t.pr_url?`<a href="${esc(t.pr_url)}" target="_blank" rel="noopener">PR ↗</a>`:(t.branch?esc(t.branch):'');
+    return `<div class="tk"><div class="top"><span class="badge b-${esc(t.status)}">${esc(LBL[t.status]||t.status)}</span>`
+      +`<span class="repo">${esc(t.repo||'')} ${t.kind==='critical'?'· critical':''}</span></div>`
+      +`<div class="task">${esc(t.task||'')}</div>`
+      +`${(t.tests||t.claude)?`<div class="info">${esc(t.tests||t.claude)}</div>`:''}`
+      +`${pr?`<div class="info">${pr}</div>`:''}</div>`;
+  }).join('') : '<div class="empty">тикетов нет</div>';
+  document.getElementById('meta').textContent = `тикетов ${d.total||0} · ${new Date().toLocaleTimeString('ru-RU',{timeZone:'Europe/Moscow'})} MSK`;
+}
+async function refresh(){ if(!authed) return; if(cur==='chat') await loadChat(); else await loadTk(); }
+
+async function boot(){
+  if(TG){ TG.ready(); TG.expand(); }
+  if(await auth()){ await refresh(); setInterval(refresh, 4000); }
+}
+boot();
+</script>
+</body>
+</html>
