@@ -89,13 +89,14 @@
 </main>
 <script>
 const TG = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
-let authed = false, cur = 'chat';
+let authed = false, cur = 'chat', chatJump = true;
 const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt = ts => { try{ return new Date(ts).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); }catch(e){ return ts||''; } };
 const LBL = {queued:'в очереди',running:'выполняется',pr_open:'PR/ветка',merged:'смержено',failed:'провал'};
 const ST = ['queued','running','pr_open','merged','failed'];
 
 function show(v){ cur=v;
+  if(v==='chat') chatJump=true;   // открыли вкладку чата → прыгнуть в конец
   for(const [id,val] of [['t-chat','chat'],['t-tk','tk'],['t-bl','bl'],['t-wd','wd']])
     document.getElementById(id).classList.toggle('on',v===val);
   for(const [id,val] of [['view-chat','chat'],['view-tk','tk'],['view-bl','bl'],['view-wd','wd']])
@@ -127,12 +128,17 @@ async function loadChat(){
     who:'→ '+(m.to||'?'),kind:m.in_reply_to?('reply #'+m.in_reply_to):'',text:m.message}));
   items.sort((a,b)=>(a.id||0)-(b.id||0));
   const el=document.getElementById('view-chat');
+  // Прыгать в конец: при открытии вкладки (chatJump) или если уже у низа (новое сообщение).
+  // Если листаешь историю вверх — не дёргаем.
+  const stick = chatJump || nearBottom();
   el.innerHTML = items.length ? items.map(it=>
     `<div class="row ${it.side}"><div class="bubble"><div class="who"><b>${esc(it.who)}</b> · #${it.id} · ${fmt(it.ts)}`
     +`${it.kind?`<span class="kind">${esc(it.kind)}</span>`:''}</div>${esc(it.text)}</div></div>`).join('')
     : '<div class="empty">пока пусто</div>';
   document.getElementById('meta').textContent = `${items.length} сообщений · ${new Date().toLocaleTimeString('ru-RU',{timeZone:'Europe/Moscow'})} MSK`;
+  if(stick){ requestAnimationFrame(()=>{ window.scrollTo(0, document.documentElement.scrollHeight); }); chatJump=false; }
 }
+function nearBottom(){ return (window.innerHeight + window.scrollY) >= (document.documentElement.scrollHeight - 140); }
 async function loadTk(){
   const d = await getJson('/api/builder/tickets');
   if(!d){ document.getElementById('tklist').innerHTML='<div class="empty">нет связи</div>'; return; }
