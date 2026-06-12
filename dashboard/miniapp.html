@@ -169,7 +169,7 @@ async function loadBl(){
   document.getElementById('bllist').innerHTML = items.length ? items.map(it=>{
     const st=it.status||'new';
     const acts = st==='done' ? '' :
-      `<div class="act">${st==='new'?`<button class="go" onclick="promo('${it.id}','${esc(it.repo||'')}')">→ Билдер</button>`:''}`
+      `<div class="act">${st==='new'?`<button class="go" onclick="promo('${it.id}')">→ Билдер</button>`:''}`
       +`<button class="done" onclick="mark('${it.id}','done')">✓ готово</button>`
       +`<button onclick="del('${it.id}')">✕</button></div>`;
     return `<div class="bl s-${st}"><div class="t">${esc(it.title)}</div>`
@@ -185,11 +185,23 @@ async function addBl(){
   const r=await post('/api/backlog',{title,repo,note});
   if(r&&r.ok){ document.getElementById('bl-title').value=''; document.getElementById('bl-note').value=''; loadBl(); }
 }
-async function promo(id,repo){
-  let r=repo; if(!r){ r=prompt('repo для Билдера (напр. infra/lineman):',''); if(!r) return; }
-  const res=await post('/api/backlog/promote',{id,repo:r});
-  if(res&&res.ok){ if(TG&&TG.HapticFeedback) TG.HapticFeedback.notificationOccurred('success'); loadBl(); }
-  else if(res===null){ alert('не удалось отправить'); }
+async function promo(id){
+  // Без repo: сервер сам резолвит по справочнику. 409 → неуверенно, выбираем из кандидатов.
+  let res=await fetch('/api/backlog/promote',{method:'POST',credentials:'same-origin',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+  if(res.status===409){
+    const d=await res.json(); const cs=d.candidates||[];
+    if(!cs.length){ alert('Репо не найден. Уточни задачу.'); return; }
+    const pick=prompt('Репо не определён точно. Выбери номер:\n'+
+      cs.map((c,i)=>`${i+1}. ${c.id}${c.own_repo?'':' (без своего git)'}  ${c.path}`).join('\n'));
+    const idx=parseInt(pick,10)-1; if(isNaN(idx)||!cs[idx]) return;
+    res=await fetch('/api/backlog/promote',{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({id,repo:cs[idx].path})});
+  }
+  if(res.ok){ const d=await res.json().catch(()=>({}));
+    if(d.warning) alert('Отправлено. ⚠️ '+d.warning);
+    if(TG&&TG.HapticFeedback) TG.HapticFeedback.notificationOccurred('success'); loadBl(); }
+  else alert('Не удалось отправить');
 }
 async function mark(id,status){ const r=await post('/api/backlog/status',{id,status}); if(r&&r.ok) loadBl(); }
 async function del(id){ const r=await post('/api/backlog/remove',{id}); if(r) loadBl(); }

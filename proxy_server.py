@@ -34,6 +34,7 @@ from circuit_breaker import CircuitBreaker
 from dedup_cache import DedupCache
 from tg_miniapp import validate_init_data, user_id_allowed
 from backlog import BacklogStore, enqueue_builder_ticket
+from federation_registry import load_registry, resolve as resolve_repo
 
 logger = structlog.get_logger(__name__)
 
@@ -548,6 +549,10 @@ class ProxyServer:
             elif request_path_only in ("/api/watchdog", "/api/watchdog/"):
                 # Вотчдог Клода (#4): последний отчёт проверок стандартов/секретов/доков.
                 await self._raw_api_watchdog(rd, wr)
+                return
+            elif request_path_only in ("/api/registry", "/api/registry/"):
+                # Справочник репо федерации: список, либо ?q=<задача> → резолв репо + кандидаты.
+                await self._raw_api_registry(rd, wr, request_path)
                 return
 
             # Reverse proxy: /proxy/{provider}/... — plaintext body inspection
@@ -2034,8 +2039,19 @@ class ProxyServer:
             if not it:
                 return self._send_simple_and_close(wr, 404, {"error": "not found"})
             repo = str(body.get("repo", "") or it.get("repo", "")).strip()
+            own_repo = None
             if not repo:
-                return self._send_simple_and_close(wr, 400, {"error": "нужен repo"})
+                # Авто-резолв репо из текста задачи по справочнику федерации.
+                res = resolve_repo(f"{it['title']} {it.get('note', '')}", load_registry())
+                if res.get("confident") and res.get("best"):
+                    repo = res["best"].get("path", "")
+                    own_repo = res["best"].get("own_repo")
+                else:
+                    cands = [{"id": c.get("id"), "path": c.get("path"), "type": c.get("type"),
+                              "own_repo": c.get("own_repo")} for c in res.get("candidates", [])[:4]]
+                    return self._send_simple_and_close(
+                        wr, 409, {"error": "репо не определён уверенно — выбери из похожих",
+                                  "candidates": cands})
             task = it["title"] + (("\n\n" + it["note"]) if it.get("note") else "")
             try:
                 tid = enqueue_builder_ticket(
@@ -2045,7 +2061,10 @@ class ProxyServer:
                 return self._send_simple_and_close(wr, 500, {"error": str(e)[:200]})
             store.set_status(it["id"], "sent", ticket_id=tid)
             logger.info("backlog_promote", id=it["id"], ticket=tid, repo=repo)
-            return self._send_simple_and_close(wr, 200, {"ok": True, "ticket_id": tid})
+            resp = {"ok": True, "ticket_id": tid, "repo": repo}
+            if own_repo is False:
+                resp["warning"] = "репо без своего git — Билдер правит на месте, PR-флоу недоступен"
+            return self._send_simple_and_close(wr, 200, resp)
 
         if method == "POST" and path == "/api/backlog/status":
             try:
@@ -2061,6 +2080,25 @@ class ProxyServer:
             return self._send_simple_and_close(wr, 200 if ok else 404, {"ok": ok})
 
         return self._send_simple_and_close(wr, 400, {"error": "bad backlog request"})
+
+    async def _raw_api_registry(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        request_path: str,
+    ) -> None:
+        """GET /api/registry — справочник репо федерации (службы/навыки/агенты).
+        GET /api/registry?q=<текст задачи> — резолв: {best, confident, candidates}."""
+        from urllib.parse import urlparse, parse_qs
+        await self._read_headers(rd)
+        reg = load_registry()
+        q = (parse_qs(urlparse(request_path).query).get("q") or [""])[0].strip()
+        if q:
+            return self._send_simple_and_close(wr, 200, resolve_repo(q, reg))
+        comps = [{k: c.get(k) for k in ("id", "type", "path", "own_repo", "node", "desc")}
+                 for c in reg.get("components", [])]
+        return self._send_simple_and_close(
+            wr, 200, {"count": len(comps), "generated": reg.get("generated"), "components": comps})
 
     async def _raw_api_watchdog(
         self,
