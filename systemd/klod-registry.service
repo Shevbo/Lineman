@@ -1,0 +1,6 @@
+[Unit]
+Description=Авто-обновление справочника репо федерации
+[Service]
+Type=oneshot
+WorkingDirectory=/home/shectory/workspaces/infra/lineman
+ExecStart=/home/shectory/workspaces/infra/lineman/.venv/bin/python3 scripts/build_registry.py
