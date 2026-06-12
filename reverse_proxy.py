@@ -22,6 +22,10 @@ logger = structlog.get_logger(__name__)
 
 # Max estimated tokens for unnamed agents before blocking
 _UNNAMED_CTX_LIMIT = 80_000
+# huge_context алерты: не чаще раза в 30 мин на агента (иначе застрявший на 300k агент
+# плодит десятки одинаковых сигналов в инбокс klod-access → флуд + трата токенов).
+_HUGE_CTX_LAST: dict[str, float] = {}
+_HUGE_CTX_COOLDOWN_S = 1800.0
 
 _UNNAMED_CTX_BLOCKED_HOSTS = frozenset({"smain", "hoster", "cloud"})
 
@@ -950,31 +954,38 @@ async def handle_reverse_proxy(
         except Exception:
             pass
 
-    # Active Censor: huge context alert to klod-access inbox
+    # Active Censor: huge context alert to klod-access inbox.
+    # Rate-limited per agent (1/30мин): застрявший на 300k агент иначе плодит десятки
+    # одинаковых сигналов в инбокс → флуд + трата токенов.
     if (tokens_in or 0) > 200_000:
-        try:
-            from klod_inbox import write_inbox
-            from db import source_host_from_ip
-            write_inbox(
-                from_agent=agent_name or "(unknown)",
-                node=source_host_from_ip(source_ip) or "smain",
-                message=(
-                    f"⚠ huge context: tokens_in={tokens_in} model={req_model} "
-                    f"provider={provider} status={status_code}. "
-                    f"Compression was {'applied' if compression_applied else 'NOT applied'}. "
-                    f"Consider pre-summarisation in this agent's pipeline."
-                ),
-                meta={
-                    "kind": "huge_context",
-                    "tokens_in": tokens_in,
-                    "tokens_out": tokens_out,
-                    "model": req_model,
-                    "provider": provider,
-                    "compression_applied": bool(compression_applied),
-                },
-            )
-        except Exception:
-            logger.exception("censor_huge_context_alert_failed")
+        import time as _t
+        _ctx_key = agent_name or "(unknown)"
+        _now = _t.time()
+        if _now - _HUGE_CTX_LAST.get(_ctx_key, 0.0) >= _HUGE_CTX_COOLDOWN_S:
+            _HUGE_CTX_LAST[_ctx_key] = _now
+            try:
+                from klod_inbox import write_inbox
+                from db import source_host_from_ip
+                write_inbox(
+                    from_agent=agent_name or "(unknown)",
+                    node=source_host_from_ip(source_ip) or "smain",
+                    message=(
+                        f"⚠ huge context: tokens_in={tokens_in} model={req_model} "
+                        f"provider={provider} status={status_code}. "
+                        f"Compression was {'applied' if compression_applied else 'NOT applied'}. "
+                        f"Consider pre-summarisation in this agent's pipeline."
+                    ),
+                    meta={
+                        "kind": "huge_context",
+                        "tokens_in": tokens_in,
+                        "tokens_out": tokens_out,
+                        "model": req_model,
+                        "provider": provider,
+                        "compression_applied": bool(compression_applied),
+                    },
+                )
+            except Exception:
+                logger.exception("censor_huge_context_alert_failed")
 
     logger.info(
         "rproxy_done",

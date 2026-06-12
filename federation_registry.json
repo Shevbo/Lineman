@@ -1,0 +1,742 @@
+{
+ "generated": "2026-06-12 16:15 MSK",
+ "count": 43,
+ "components": [
+  {
+   "id": "eshkola",
+   "type": "agent",
+   "name": "eshkola",
+   "path": "/home/shectory/workspaces/eshkola",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "eshkola",
+    "школ",
+    "эшкол"
+   ]
+  },
+  {
+   "id": "guilya",
+   "type": "agent",
+   "name": "guilya",
+   "path": "/home/shectory/workspaces/guilya",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "guilya",
+    "гуйля",
+    "гуля"
+   ]
+  },
+  {
+   "id": "inbox",
+   "type": "agent",
+   "name": "inbox",
+   "path": "/home/shectory/workspaces/inbox",
+   "git_root": "/home/shectory/workspaces/inbox",
+   "own_repo": true,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "inbox",
+    "входящ",
+    "инбокс"
+   ]
+  },
+  {
+   "id": "interview-coach",
+   "type": "agent",
+   "name": "interview-coach",
+   "path": "/home/shectory/workspaces/interview-coach",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "coach",
+    "interview",
+    "интервью",
+    "собеседов"
+   ]
+  },
+  {
+   "id": "nurse",
+   "type": "agent",
+   "name": "nurse",
+   "path": "/home/shectory/workspaces/nurse",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "nurse",
+    "здоров",
+    "лекарств",
+    "медсестра",
+    "приём",
+    "таблетк"
+   ]
+  },
+  {
+   "id": "qaper",
+   "type": "agent",
+   "name": "qaper",
+   "path": "/home/shectory/workspaces/qaper",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "qa",
+    "qaper",
+    "проверк качеств",
+    "тест"
+   ]
+  },
+  {
+   "id": "resume-editor",
+   "type": "agent",
+   "name": "resume-editor",
+   "path": "/home/shectory/workspaces/resume-editor",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "cv ",
+    "editor",
+    "resume",
+    "резюме"
+   ]
+  },
+  {
+   "id": "selfcoder",
+   "type": "agent",
+   "name": "selfcoder",
+   "path": "/home/shectory/workspaces/selfcoder",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "selfcoder",
+    "автокодер",
+    "селфкодер"
+   ]
+  },
+  {
+   "id": "titan",
+   "type": "agent",
+   "name": "titan",
+   "path": "/home/shectory/workspaces/titan",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "polar",
+    "titan",
+    "вес",
+    "питание",
+    "титан",
+    "тренер",
+    "тренировк",
+    "фитнес"
+   ]
+  },
+  {
+   "id": "virtual-boris",
+   "type": "agent",
+   "name": "virtual-boris",
+   "path": "/home/shectory/workspaces/virtual-boris",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "boris",
+    "vboris",
+    "virtual",
+    "virtual boris",
+    "виртуальн борис",
+    "двойник"
+   ]
+  },
+  {
+   "id": "CursorRPA",
+   "type": "service",
+   "name": "CursorRPA",
+   "path": "/home/shectory/workspaces/projects/CursorRPA",
+   "git_root": "/home/shectory/workspaces/projects/CursorRPA",
+   "own_repo": true,
+   "git_remote": "git@github.com:Shevbo/CursorRPA.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "cursorrpa"
+   ]
+  },
+  {
+   "id": "PingMaster",
+   "type": "service",
+   "name": "PingMaster",
+   "path": "/home/shectory/workspaces/projects/PingMaster",
+   "git_root": "/home/shectory/workspaces/projects/PingMaster",
+   "own_repo": true,
+   "git_remote": "ssh://hoster/home/ubuntu/repos/pingmaster.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "pingmaster"
+   ]
+  },
+  {
+   "id": "PiranhaAI",
+   "type": "service",
+   "name": "PiranhaAI",
+   "path": "/home/shectory/workspaces/projects/PiranhaAI",
+   "git_root": "/home/shectory/workspaces/projects/PiranhaAI",
+   "own_repo": true,
+   "git_remote": "ssh://hoster/home/ubuntu/repos/piranha-ai.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "piranhaai"
+   ]
+  },
+  {
+   "id": "Shectory Assist",
+   "type": "service",
+   "name": "Shectory Assist",
+   "path": "/home/shectory/workspaces/projects/Shectory Assist",
+   "git_root": "/home/shectory/workspaces/projects/Shectory Assist",
+   "own_repo": true,
+   "git_remote": "git@github.com:Shevbo/ShectoryAssist.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "assist",
+    "shectory"
+   ]
+  },
+  {
+   "id": "Shectory Trade & Lab",
+   "type": "service",
+   "name": "Shectory Trade & Lab",
+   "path": "/home/shectory/workspaces/Shectory Trade & Lab",
+   "git_root": "/home/shectory/workspaces/Shectory Trade & Lab",
+   "own_repo": true,
+   "git_remote": "sdev:repos/shectory-trade-lab.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "lab",
+    "shectory",
+    "trade"
+   ]
+  },
+  {
+   "id": "Shectory Trade & Lab",
+   "type": "service",
+   "name": "Shectory Trade & Lab",
+   "path": "/home/shectory/workspaces/projects/Shectory Trade & Lab",
+   "git_root": "/home/shectory/workspaces/projects/Shectory Trade & Lab",
+   "own_repo": true,
+   "git_remote": "git@github.com:Shevbo/STL.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "lab",
+    "shectory",
+    "trade"
+   ]
+  },
+  {
+   "id": "career-bot",
+   "type": "service",
+   "name": "career-bot",
+   "path": "/home/shectory/workspaces/career-bot",
+   "git_root": "/home/shectory/workspaces/career-bot",
+   "own_repo": true,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "bot",
+    "career",
+    "карьер",
+    "карьерный бот"
+   ]
+  },
+  {
+   "id": "gemini-live-service",
+   "type": "service",
+   "name": "gemini-live-service",
+   "path": "/home/shectory/workspaces/projects/gemini-live-service",
+   "git_root": "/home/shectory/workspaces/projects/gemini-live-service",
+   "own_repo": true,
+   "git_remote": "git@github.com:Shevbo/gemini-live-service.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "gemini",
+    "gemini live",
+    "live",
+    "service",
+    "голосовой gemini",
+    "джемини лайв"
+   ]
+  },
+  {
+   "id": "klod-foreman",
+   "type": "service",
+   "name": "klod-foreman",
+   "path": "/home/shectory/workspaces/klod-foreman",
+   "git_root": "/home/shectory/workspaces/klod-foreman",
+   "own_repo": true,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "builder",
+    "foreman",
+    "klod",
+    "medic",
+    "билдер",
+    "диспетчер",
+    "клод",
+    "медик",
+    "форман"
+   ]
+  },
+  {
+   "id": "komissionka",
+   "type": "service",
+   "name": "komissionka",
+   "path": "/home/shectory/workspaces/projects/komissionka",
+   "git_root": "/home/shectory/workspaces/projects/komissionka",
+   "own_repo": true,
+   "git_remote": "git@github.com:Shevbo/komissionka-app.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "komissionka"
+   ]
+  },
+  {
+   "id": "lineman",
+   "type": "service",
+   "name": "lineman",
+   "path": "/home/shectory/workspaces/infra/lineman",
+   "git_root": "/home/shectory/workspaces/infra/lineman",
+   "own_repo": true,
+   "git_remote": "git@github.com:Shevbo/Lineman.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "dashboard",
+    "gateway",
+    "lineman",
+    "proxy",
+    "reverse proxy",
+    "бэклог",
+    "вотчдог",
+    "дашборд",
+    "лайнмен",
+    "миниап",
+    "миниапп",
+    "прокси",
+    "роутинг",
+    "шлюз"
+   ]
+  },
+  {
+   "id": "openclaw",
+   "type": "service",
+   "name": "openclaw",
+   "path": "/home/shectory/workspaces/projects/openclaw",
+   "git_root": "/home/shectory/workspaces/projects/openclaw",
+   "own_repo": true,
+   "git_remote": "git@github.com:Shevbo/OpenClaw-Dev.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "openclaw",
+    "гейтвей агент",
+    "опенкло",
+    "ядро агент"
+   ]
+  },
+  {
+   "id": "ourdiary",
+   "type": "service",
+   "name": "ourdiary",
+   "path": "/home/shectory/workspaces/projects/ourdiary",
+   "git_root": "/home/shectory/workspaces/projects/ourdiary",
+   "own_repo": true,
+   "git_remote": "git@github.com:Shevbo/ourdiary.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "ourdiary"
+   ]
+  },
+  {
+   "id": "shectory-infra",
+   "type": "service",
+   "name": "shectory-infra",
+   "path": "/home/shectory/workspaces/infra/shectory-infra",
+   "git_root": "/home/shectory/workspaces/infra/shectory-infra",
+   "own_repo": true,
+   "git_remote": "git@github.com:Shevbo/shectory-infra.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "infra",
+    "nginx",
+    "shectory",
+    "systemd",
+    "деплой",
+    "инфра",
+    "сервер"
+   ]
+  },
+  {
+   "id": "syslog-srv",
+   "type": "service",
+   "name": "syslog-srv",
+   "path": "/home/shectory/workspaces/infra/syslog-srv",
+   "git_root": "/home/shectory/workspaces/infra/syslog-srv",
+   "own_repo": true,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "srv",
+    "syslog"
+   ]
+  },
+  {
+   "id": "billing-monitor",
+   "type": "skill",
+   "name": "billing-monitor",
+   "path": "/home/shectory/.openclaw/skills/billing-monitor",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "billing",
+    "monitor"
+   ]
+  },
+  {
+   "id": "chat-handoff",
+   "type": "skill",
+   "name": "chat-handoff",
+   "path": "/home/shectory/skills/chat-handoff",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "chat",
+    "handoff"
+   ]
+  },
+  {
+   "id": "claude-bridge",
+   "type": "skill",
+   "name": "claude-bridge",
+   "path": "/home/shectory/skills/claude-bridge",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "bridge",
+    "claude"
+   ]
+  },
+  {
+   "id": "github-repo",
+   "type": "skill",
+   "name": "github-repo",
+   "path": "/home/shectory/skills/github-repo",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "github",
+    "repo",
+    "гитхаб",
+    "репозитори"
+   ]
+  },
+  {
+   "id": "gog",
+   "type": "skill",
+   "name": "gog",
+   "path": "/home/shectory/skills/gog",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "gog",
+    "google cli",
+    "гугл cli"
+   ]
+  },
+  {
+   "id": "image-gen",
+   "type": "skill",
+   "name": "image-gen",
+   "path": "/home/shectory/skills/image-gen",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "gen",
+    "image",
+    "image gen",
+    "генерац картин",
+    "картинк"
+   ]
+  },
+  {
+   "id": "meeting",
+   "type": "skill",
+   "name": "meeting",
+   "path": "/home/shectory/skills/meeting",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "meeting",
+    "встреч",
+    "созвон"
+   ]
+  },
+  {
+   "id": "polar-accesslink",
+   "type": "skill",
+   "name": "polar-accesslink",
+   "path": "/home/shectory/skills/polar-accesslink",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "accesslink",
+    "polar",
+    "workout",
+    "кардио",
+    "пульс",
+    "трен ",
+    "тренировк",
+    "треня"
+   ]
+  },
+  {
+   "id": "polar-link",
+   "type": "skill",
+   "name": "polar-link",
+   "path": "/home/shectory/skills/polar-link",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "flow.polar",
+    "link",
+    "polar",
+    "polar link",
+    "polar ссылк",
+    "polarlink",
+    "share"
+   ]
+  },
+  {
+   "id": "screenshot-reader",
+   "type": "skill",
+   "name": "screenshot-reader",
+   "path": "/home/shectory/skills/screenshot-reader",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "reader",
+    "screenshot",
+    "скриншот",
+    "чтение экран"
+   ]
+  },
+  {
+   "id": "self-improving-agent",
+   "type": "skill",
+   "name": "self-improving-agent",
+   "path": "/home/shectory/skills/self-improving-agent",
+   "git_root": "/home/shectory/skills/self-improving-agent",
+   "own_repo": true,
+   "git_remote": "https://github.com/peterskoett/self-improving-agent.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "agent",
+    "improving",
+    "self"
+   ]
+  },
+  {
+   "id": "self-improving-agent",
+   "type": "skill",
+   "name": "self-improving-agent",
+   "path": "/home/shectory/.openclaw/skills/self-improving-agent",
+   "git_root": "/home/shectory/.openclaw/skills/self-improving-agent",
+   "own_repo": true,
+   "git_remote": "https://github.com/peterskoett/self-improving-agent.git",
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "agent",
+    "improving",
+    "self"
+   ]
+  },
+  {
+   "id": "summarize-master",
+   "type": "skill",
+   "name": "summarize-master",
+   "path": "/home/shectory/skills/summarize-master",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "master",
+    "summar",
+    "summarize",
+    "выжимк",
+    "саммари",
+    "сжать текст"
+   ]
+  },
+  {
+   "id": "task-orchestra",
+   "type": "skill",
+   "name": "task-orchestra",
+   "path": "/home/shectory/skills/task-orchestra",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "orchestra",
+    "task"
+   ]
+  },
+  {
+   "id": "voice-parser",
+   "type": "skill",
+   "name": "voice-parser",
+   "path": "/home/shectory/skills/voice-parser",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "parser",
+    "voice",
+    "voice parse",
+    "голосовое сообщение",
+    "распознав",
+    "расшифров",
+    "транскрипц"
+   ]
+  },
+  {
+   "id": "voice-profiles",
+   "type": "skill",
+   "name": "voice-profiles",
+   "path": "/home/shectory/skills/voice-profiles",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "profiles",
+    "tts",
+    "voice",
+    "голос",
+    "голосов",
+    "озвучива",
+    "озвучк",
+    "профил голос"
+   ]
+  },
+  {
+   "id": "youtube",
+   "type": "skill",
+   "name": "youtube",
+   "path": "/home/shectory/skills/youtube",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "youtube",
+    "видео поиск",
+    "ютуб"
+   ]
+  },
+  {
+   "id": "youtube-parse",
+   "type": "skill",
+   "name": "youtube-parse",
+   "path": "/home/shectory/skills/youtube-parse",
+   "git_root": "/home/shectory",
+   "own_repo": false,
+   "git_remote": null,
+   "node": "smain",
+   "desc": "",
+   "keywords": [
+    "parse",
+    "youtube"
+   ]
+  }
+ ]
+}
