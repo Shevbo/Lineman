@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -453,6 +454,13 @@ async def handle_reverse_proxy(
 
     provider = parts[1]
     rest_path = "/" + parts[2] if len(parts) > 2 else "/"
+
+    # ГАРД 3.1-pro: у gemini-3.1-pro мусорный лимит 250 RPD даже на Tier1 (выжигается аудитором/
+    # сервисами за часы → 429 всей федерации). Переписываем на gemini-2.5-pro (1K RPD, 2M TPM)
+    # на ШЛЮЗЕ — никто не может жечь общий 250/день. Модель google в URL-пути.
+    if provider == "google" and "gemini-3.1-pro" in rest_path:
+        rest_path = re.sub(r"gemini-3\.1-pro(-preview|-latest)?", "gemini-2.5-pro", rest_path)
+        logger.info("gemini_31pro_rewritten", path=rest_path[:80])
 
     upstream_base = _resolve_upstream(provider, config)
     if not upstream_base:
