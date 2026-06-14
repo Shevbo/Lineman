@@ -329,6 +329,23 @@ def _google_api_key() -> str:
         return ""
 
 
+def _strip_query_key(url: str) -> str:
+    """Срезать любой клиентский key=... из query — Lineman поставит свой эксклюзивный."""
+    if "key=" not in url:
+        return url
+    base, _, query = url.partition("?")
+    if not query:
+        return url
+    kept = [p for p in query.split("&") if not p.startswith("key=")]
+    return base + ("?" + "&".join(kept) if kept else "")
+
+
+def _drop_client_google_creds(headers: dict[str, str]) -> None:
+    """Убрать клиентский google-ключ из заголовков (любой регистр) — ключ только у Lineman."""
+    for hk in [k for k in headers if k.lower() == "x-goog-api-key"]:
+        headers.pop(hk, None)
+
+
 async def _handle_passthrough(
     method: str,
     provider: str,
@@ -367,8 +384,11 @@ async def _handle_passthrough(
     # Build upstream URL
     upstream_url = upstream_base.rstrip("/") + rest_path
 
-    # Inject Google API key (эксклюзивный ключ Lineman)
-    if provider == "google" and "key=" not in upstream_url:
+    # Google: Lineman — ЕДИНСТВЕННЫЙ держатель ключа. Срезаем любой клиентский ключ
+    # (URL key= и заголовок x-goog-api-key) и инжектим эксклюзивный ключ Lineman.
+    if provider == "google":
+        _drop_client_google_creds(req_headers)
+        upstream_url = _strip_query_key(upstream_url)
         gkey = _google_api_key()
         if gkey:
             sep = "&" if "?" in upstream_url else "?"
@@ -750,8 +770,11 @@ async def handle_reverse_proxy(
 
     upstream_url = upstream_base.rstrip("/") + rest_path
 
-    # Inject Google API key if not already in URL (эксклюзивный ключ Lineman)
-    if provider == "google" and "key=" not in upstream_url:
+    # Google: Lineman — ЕДИНСТВЕННЫЙ держатель ключа. Срезаем любой клиентский ключ
+    # (URL key= и заголовок x-goog-api-key) и инжектим эксклюзивный ключ Lineman.
+    if provider == "google":
+        _drop_client_google_creds(fwd_headers)
+        upstream_url = _strip_query_key(upstream_url)
         gkey = _google_api_key()
         if gkey:
             sep = "&" if "?" in upstream_url else "?"
