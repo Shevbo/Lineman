@@ -119,25 +119,16 @@ def evaluate_and_heal(
         actions.append(ha)
         logger.critical("gemini_all_down_manual_intervention")
 
-    # Rule: Telegram DOWN → switch to Proxy6
+    # Rule: Telegram DOWN → alert, manual intervention required
+    # Proxy6 switching not implemented: Telegram service has use_proxy6=false in config.
+    # Auto-switch was a no-op (set success=True without running any command). Fixed to alert-only.
     if telegram.get("state") == "down":
-        proxy6 = global_cfg.get("proxy6_url", "")
-        if proxy6:
-            ha = HealAction(
-                service_id="telegram",
-                action="Switch Telegram to Proxy6",
-                command=f"update proxy6_url in config",
-            )
-            ha.success = True
-            actions.append(ha)
-            _log_heal(ha)
-        else:
-            ha = HealAction(
-                service_id="telegram",
-                action="Telegram DOWN, no Proxy6 configured — manual intervention required",
-            )
-            actions.append(ha)
-            logger.critical("telegram_down_no_proxy6")
+        ha = HealAction(
+            service_id="telegram",
+            action="Telegram DOWN — manual intervention required (check iProyal proxy, consider enabling use_proxy6 in config)",
+        )
+        actions.append(ha)
+        logger.critical("telegram_down_manual_intervention")
 
     # Rule: Google Drive/Gmail DOWN → alert, manual
     for svc_id, svc_state in [("google-drive", gdrive), ("google-gmail", gmail)]:
@@ -159,7 +150,10 @@ def evaluate_and_heal(
             "error": ha.error,
         }
         svc_entry = services_state.setdefault(ha.service_id, {})
-        svc_entry.setdefault("incidents", []).append(entry)
+        incidents = svc_entry.setdefault("incidents", [])
+        incidents.append(entry)
+        if len(incidents) > 200:
+            svc_entry["incidents"] = incidents[-200:]
 
     return actions
 
