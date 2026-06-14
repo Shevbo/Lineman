@@ -124,6 +124,7 @@ class RequestLogDB:
             ("compression_applied", "INTEGER DEFAULT 0"),
             ("tail_tokens_before", "INTEGER"),
             ("tail_tokens_after", "INTEGER"),
+            ("request_headers_masked", "TEXT"),
         ]:
             try:
                 self._conn.execute(
