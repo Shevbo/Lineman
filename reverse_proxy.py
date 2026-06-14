@@ -314,6 +314,21 @@ async def _stream_body(reader: asyncio.StreamReader, content_length: int):
         remaining -= len(chunk)
 
 
+def _google_api_key() -> str:
+    """Ключ Gemini ТОЛЬКО у Lineman: GEMINI_LINEMAN_API_TOKEN (новый эксклюзивный ключ).
+    Агенты ходят через /proxy/google БЕЗ ключа — Lineman его инжектит. Транзишн-фолбэк на
+    старый GEMINI_API_KEY / openclaw.json, пока новый не прилетел от Ключника."""
+    k = os.environ.get("GEMINI_LINEMAN_API_TOKEN") or os.environ.get("GEMINI_API_KEY")
+    if k and k.strip():
+        return k.strip()
+    try:
+        with open(os.path.expanduser("~/.openclaw/openclaw.json")) as _f:
+            _oc = json.load(_f)
+        return (_oc.get("models", {}).get("providers", {}).get("google", {}).get("apiKey", "") or "").strip()
+    except Exception:
+        return ""
+
+
 async def _handle_passthrough(
     method: str,
     provider: str,
@@ -352,19 +367,12 @@ async def _handle_passthrough(
     # Build upstream URL
     upstream_url = upstream_base.rstrip("/") + rest_path
 
-    # Inject Google API key
+    # Inject Google API key (эксклюзивный ключ Lineman)
     if provider == "google" and "key=" not in upstream_url:
-        try:
-            oc_path = os.path.expanduser("~/.openclaw/openclaw.json")
-            with open(oc_path) as _f:
-                _oc = json.load(_f)
-            gkey = (_oc.get("models", {}).get("providers", {})
-                    .get("google", {}).get("apiKey", ""))
-            if gkey:
-                sep = "&" if "?" in upstream_url else "?"
-                upstream_url += sep + "key=" + gkey
-        except Exception:
-            pass
+        gkey = _google_api_key()
+        if gkey:
+            sep = "&" if "?" in upstream_url else "?"
+            upstream_url += sep + "key=" + gkey
 
     fwd_headers = {k: v for k, v in req_headers.items() if k not in _HOP_BY_HOP}
     fwd_headers["accept-encoding"] = "gzip, deflate, identity"
@@ -742,18 +750,12 @@ async def handle_reverse_proxy(
 
     upstream_url = upstream_base.rstrip("/") + rest_path
 
-    # Inject Google API key if not already in URL
+    # Inject Google API key if not already in URL (эксклюзивный ключ Lineman)
     if provider == "google" and "key=" not in upstream_url:
-        try:
-            oc_path = os.path.expanduser("~/.openclaw/openclaw.json")
-            with open(oc_path) as _f:
-                _oc = json.load(_f)
-            gkey = _oc.get("models", {}).get("providers", {}).get("google", {}).get("apiKey", "")
-            if gkey:
-                sep = "&" if "?" in upstream_url else "?"
-                upstream_url = upstream_url + sep + "key=" + gkey
-        except Exception:
-            pass
+        gkey = _google_api_key()
+        if gkey:
+            sep = "&" if "?" in upstream_url else "?"
+            upstream_url = upstream_url + sep + "key=" + gkey
 
     # Inject DeepSeek API key if not already in Authorization header
     if provider == "deepseek" and "authorization" not in {k.lower() for k in fwd_headers}:

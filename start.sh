@@ -27,4 +27,9 @@ try:
 except: print('')
 ")"
 
+# Эксклюзивный ключ Gemini ТОЛЬКО у Lineman (Боря заводит через Ключника). Если задан —
+# reverse_proxy инжектит ИМЕННО его на /proxy/google; агенты без ключа ходят только через шлюз.
+# Источник: .lineman-proxy.env (sourced выше) ИЛИ credential-файл Ключника (любое из имён).
+export GEMINI_LINEMAN_API_TOKEN="${GEMINI_LINEMAN_API_TOKEN:-$(cat ~/.keymaster/credentials/gemini_lineman_api_token 2>/dev/null || cat ~/.keymaster/credentials/gemini-lineman-api-token 2>/dev/null)}"
+
 exec .venv/bin/python3 main.py
