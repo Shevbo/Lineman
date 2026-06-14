@@ -546,6 +546,10 @@ class ProxyServer:
                 # Трекер бэклога Клода (#7): список/добавить/промоут в Билдер/статус.
                 await self._raw_api_backlog(rd, wr, request_path, method)
                 return
+            elif request_path_only.startswith("/api/gemini-pro"):
+                # Пер-агентный грант Gemini Pro: статус/выдать/снять (кнопка в ТГ-ботах).
+                await self._raw_api_gemini_pro(rd, wr, request_path, method)
+                return
             elif request_path_only in ("/api/watchdog", "/api/watchdog/"):
                 # Вотчдог Клода (#4): последний отчёт проверок стандартов/секретов/доков.
                 await self._raw_api_watchdog(rd, wr)
@@ -2080,6 +2084,69 @@ class ProxyServer:
             return self._send_simple_and_close(wr, 200 if ok else 404, {"ok": ok})
 
         return self._send_simple_and_close(wr, 400, {"error": "bad backlog request"})
+
+    async def _raw_api_gemini_pro(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        request_path: str,
+        method: str,
+    ) -> None:
+        """Пер-агентный грант Gemini Pro. Кнопку жмёт только Боря (проверка tg_id на стороне бота).
+          GET  /api/gemini-pro                    → {grants:[{agent,remaining_min}], default_hours}
+          POST /api/gemini-pro/grant  {agent, hours?}  → выдать Pro до now+N часов
+          POST /api/gemini-pro/revoke {agent}          → снять грант
+        """
+        from urllib.parse import urlparse
+
+        from gemini_pro import get_grants
+        headers = await self._read_headers(rd)
+        clen = int(headers.get("content-length", "0") or "0")
+        raw = await asyncio.wait_for(rd.read(min(clen, 65536)), timeout=10) if clen > 0 else b""
+        path = urlparse(request_path).path.rstrip("/") or "/api/gemini-pro"
+        try:
+            body = json.loads(raw) if raw else {}
+            if not isinstance(body, dict):
+                body = {}
+        except Exception:
+            body = {}
+
+        gp_cfg = (self._config or {}).get("gemini_pro", {})
+        default_hours = float(gp_cfg.get("default_hours", 3))
+        grants = get_grants(default_hours=default_hours)
+
+        if method == "GET" and path == "/api/gemini-pro":
+            st = grants.status()
+            items = [{"agent": a, "remaining_min": round(sec / 60, 1)} for a, sec in st.items()]
+            return self._send_simple_and_close(
+                wr, 200, {"grants": items, "default_hours": default_hours,
+                          "base_model": gp_cfg.get("base_model", "gemini-3.5-flash"),
+                          "pro_model": gp_cfg.get("pro_model", "gemini-2.5-pro")})
+
+        if method == "POST" and path == "/api/gemini-pro/grant":
+            agent = str(body.get("agent", "")).strip()
+            if not agent:
+                return self._send_simple_and_close(wr, 400, {"error": "agent required"})
+            hours = body.get("hours")
+            try:
+                hours = float(hours) if hours is not None else None
+            except (TypeError, ValueError):
+                hours = None
+            exp = grants.grant(agent, hours=hours)
+            logger.info("gemini_pro_grant", agent=agent, hours=hours or default_hours)
+            return self._send_simple_and_close(
+                wr, 200, {"ok": True, "agent": agent, "expires_at": exp,
+                          "remaining_min": round((exp - time.time()) / 60, 1)})
+
+        if method == "POST" and path == "/api/gemini-pro/revoke":
+            agent = str(body.get("agent", "")).strip()
+            if not agent:
+                return self._send_simple_and_close(wr, 400, {"error": "agent required"})
+            grants.revoke(agent)
+            logger.info("gemini_pro_revoke", agent=agent)
+            return self._send_simple_and_close(wr, 200, {"ok": True, "agent": agent})
+
+        return self._send_simple_and_close(wr, 400, {"error": "bad gemini-pro request"})
 
     async def _raw_api_registry(
         self,

@@ -596,6 +596,20 @@ async def handle_reverse_proxy(
     agent_name = _extract_agent_name(req_headers)
     prompt_snippet = _extract_prompt_snippet(req_body)
 
+    # Пер-агентный гейт Gemini Pro: без активного гранта pro-модель → база (gemini-3.5-flash).
+    # Глобальный guard 3.1-pro→2.5-pro уже применён к rest_path выше (до диспетча).
+    if provider == "google":
+        from gemini_pro import apply_pro_gate, get_grants
+        _new_path = apply_pro_gate(rest_path, agent_name, get_grants(), config)
+        if _new_path != rest_path:
+            logger.info("gemini_pro_downgrade", agent=agent_name or "(unknown)",
+                        from_path=rest_path[:60], to_path=_new_path[:60])
+            rest_path = _new_path
+        if not req_model:
+            _gm = re.search(r"models/([^:/?]+)", rest_path)
+            if _gm:
+                req_model = _gm.group(1)
+
     # Context limit — block unnamed agents with runaway context
     if not agent_name and req_body:
         from db import source_host_from_ip as _shost_fn
