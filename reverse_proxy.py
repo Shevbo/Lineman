@@ -993,6 +993,10 @@ async def handle_reverse_proxy(
                 "compression_applied": compression_applied,
                 "tail_tokens_before": tail_tokens_before,
                 "tail_tokens_after": tail_tokens_after,
+                # #5: измеримая экономия токенов от компрессии хвоста (% урезанных токенов).
+                "token_economy_pct": round(
+                    (tail_tokens_before - tail_tokens_after) / tail_tokens_before * 100, 1)
+                    if tail_tokens_before > 0 and tail_tokens_after < tail_tokens_before else 0.0,
                 "route_applied": f"rproxy:{provider}",
                 "status_code": status_code,
                 "error": error_str,
