@@ -23,6 +23,10 @@ logger = structlog.get_logger(__name__)
 
 # Max estimated tokens for unnamed agents before blocking
 _UNNAMED_CTX_LIMIT = 80_000
+# Потолок контекста на ОДИН запрос для ИМЕНОВАННЫХ агентов (дефолт; перебивается
+# config.reverse_proxy.ctx_hard_limit). Главный жор федерации — claude-cli:lineman ~500k/запрос
+# (max 999k). Абсурдные одиночные запросы режем 429, чтобы заставить суммаризировать.
+_NAMED_CTX_HARD_LIMIT = 700_000
 # huge_context алерты: не чаще раза в 30 мин на агента (иначе застрявший на 300k агент
 # плодит десятки одинаковых сигналов в инбокс klod-access → флуд + трата токенов).
 _HUGE_CTX_LAST: dict[str, float] = {}
@@ -636,6 +640,27 @@ async def handle_reverse_proxy(
                     "на чём застрял? Сохрани ключевые факты и начни новую сессию."
                 )
                 await _send_json_error(writer, 429, _detail)
+                return
+
+    # Hard-ceiling контекста для ИМЕНОВАННЫХ агентов (anthropic — главный жор). Режем абсурдные
+    # одиночные запросы (500k-999k токенов) ДО форварда — экономия + сигнал «суммаризируй».
+    if agent_name and req_body and provider == "anthropic":
+        _hard = int(((config or {}).get("reverse_proxy", {}) or {}).get(
+            "ctx_hard_limit", _NAMED_CTX_HARD_LIMIT) or 0)
+        if _hard > 0:
+            try:
+                _j = json.loads(req_body)
+                _est = sum(_count_message_tokens(m.get("content", "")) for m in (_j.get("messages") or []))
+                _est += _count_message_tokens(_j.get("system", ""))
+            except Exception:
+                _est = len(req_body) // 4
+            if _est > _hard:
+                logger.warning("named_ctx_hard_blocked", agent=agent_name,
+                               estimated_tokens=_est, limit=_hard, provider=provider)
+                await _send_json_error(writer, 429,
+                    f"[LINEMAN GUARD] Контекст ~{_est // 1000}K токенов (потолок {_hard // 1000}K). "
+                    "Запрос заблокирован: слишком большой контекст на один вызов. "
+                    "Суммаризируй/очисти историю и повтори меньшим контекстом.")
                 return
 
     # Circuit breaker — check before forwarding
