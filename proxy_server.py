@@ -1285,6 +1285,10 @@ class ProxyServer:
             f"HTTP/1.1 {status} {reason}\r\n"
             f"Content-Type: application/json; charset=utf-8\r\n"
             f"Content-Length: {len(body)}\r\n"
+            # CORS: голосовые аппы (voice.shectory.ru) дёргают /api/gemini-pro с initData-заголовком.
+            f"Access-Control-Allow-Origin: *\r\n"
+            f"Access-Control-Allow-Headers: Content-Type, X-Telegram-Init-Data\r\n"
+            f"Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
             f"Connection: close\r\n\r\n".encode()
         )
         wr.write(body)
@@ -2148,6 +2152,9 @@ class ProxyServer:
                 body = {}
         except Exception:
             body = {}
+
+        if method == "OPTIONS":
+            return self._send_simple_and_close(wr, 200, {"ok": True})  # CORS preflight
 
         gp_cfg = (self._config or {}).get("gemini_pro", {})
         default_hours = float(gp_cfg.get("default_hours", 3))
