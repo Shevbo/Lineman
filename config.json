@@ -312,7 +312,7 @@
     "alert_cooldown_secs": 120
   },
   "reverse_proxy": {
-    "ctx_hard_limit": 700000,
+    "ctx_hard_limit": 500000,
     "daily_token_caps": {
       "deepseek": 1000000,
       "anthropic": 1000000000
