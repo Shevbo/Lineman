@@ -51,26 +51,26 @@
       "name": "Gemini Flash",
       "type": "gemini",
       "model": "gemini-2.5-flash",
-      "base_url": "https://generativelanguage.googleapis.com",
+      "base_url": "http://127.0.0.1:9090/proxy/google",
       "health_endpoint": "/v1beta/models",
       "api_key_env": "GEMINI_API_KEY",
       "openclaw_config_path": "",
       "timeout": 15,
       "interval": 60,
-      "proxy": true
+      "proxy": false
     },
     {
       "id": "gemini-pro",
       "name": "Gemini Pro",
       "type": "gemini",
-      "model": "gemini-3.1-pro-preview",
-      "base_url": "https://generativelanguage.googleapis.com",
+      "model": "gemini-2.5-pro",
+      "base_url": "http://127.0.0.1:9090/proxy/google",
       "health_endpoint": "/v1beta/models",
       "api_key_env": "GEMINI_API_KEY",
       "openclaw_config_path": "",
       "timeout": 15,
       "interval": 60,
-      "proxy": true
+      "proxy": false
     },
     {
       "id": "google-drive",
