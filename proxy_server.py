@@ -448,6 +448,10 @@ class ProxyServer:
             elif request_path_only in ("/miniapp", "/miniapp/"):
                 await self._raw_dashboard(rd, wr, "miniapp.html")
                 return
+            # Тумблер Gemini Pro для агентов (menu-кнопка ботов Медсестра/Карьера/Титан).
+            elif request_path_only in ("/gemini-pro", "/gemini-pro/"):
+                await self._raw_dashboard(rd, wr, "gemini-pro.html")
+                return
             elif request_path_only == "/api/tg/miniapp-auth" and method == "POST":
                 await self._raw_api_miniapp_auth(rd, wr)
                 return
@@ -2085,6 +2089,40 @@ class ProxyServer:
 
         return self._send_simple_and_close(wr, 400, {"error": "bad backlog request"})
 
+    def _gp_boris_authorized(self, headers: dict) -> bool:
+        """True если запрос пришёл от Бори через Telegram Mini App (initData подписан токеном
+        бота агента: nurse/titan/career). Только id 36910539."""
+        init = headers.get("x-telegram-init-data", "")
+        if not init:
+            return False
+        tokens: list[str] = []
+        try:
+            import json as _j
+            import os as _os
+            oc = _j.load(open(_os.path.expanduser("~/.openclaw/openclaw.json")))
+            accts = oc.get("channels", {}).get("telegram", {}).get("accounts", {})
+            for a in ("nurse", "titan"):
+                t = accts.get(a, {}).get("botToken")
+                if t:
+                    tokens.append(t)
+        except Exception:
+            pass
+        # токен career-bot (отдельный Python-бот)
+        for p in ("~/.keymaster/credentials/career_bot_token",
+                  "~/.openclaw/credentials/career-bot-token"):
+            try:
+                import os as _os2
+                fp = _os2.path.expanduser(p)
+                if _os2.path.exists(fp):
+                    tokens.append(open(fp).read().strip())
+            except Exception:
+                pass
+        for tok in tokens:
+            res = validate_init_data(init, tok)
+            if res and str((res.get("user") or {}).get("id")) == "36910539":
+                return True
+        return False
+
     async def _raw_api_gemini_pro(
         self,
         rd: asyncio.StreamReader,
@@ -2114,6 +2152,10 @@ class ProxyServer:
         gp_cfg = (self._config or {}).get("gemini_pro", {})
         default_hours = float(gp_cfg.get("default_hours", 3))
         grants = get_grants(default_hours=default_hours)
+
+        # grant/revoke — только Боря через Telegram (initData подписан токеном бота агента).
+        if method == "POST" and not self._gp_boris_authorized(headers):
+            return self._send_simple_and_close(wr, 403, {"error": "только Борис (Telegram Mini App)"})
 
         if method == "GET" and path == "/api/gemini-pro":
             st = grants.status()

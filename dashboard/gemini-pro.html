@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini Pro</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #14181d; color: #e8e8e8;
+           min-height: 100dvh; display: flex; flex-direction: column; align-items: center;
+           justify-content: center; gap: 22px; padding: 24px; }
+    h1 { font-size: 1.15rem; color: #5b9bd5; font-weight: 700; letter-spacing: .04em; }
+    .agent { font-size: 1rem; color: #8ab4d4; }
+    .card { background: #1d242c; border: 1px solid #2e3a4a; border-radius: 16px;
+            padding: 22px; width: min(360px, 92vw); display: flex; flex-direction: column; gap: 16px; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .state { font-size: 1.05rem; font-weight: 600; }
+    .on { color: #2ecc71; } .off { color: #8a9aaa; }
+    .sub { font-size: .82rem; color: #6a7a8a; }
+    button { border: none; border-radius: 12px; padding: 14px; font-size: 1rem; cursor: pointer;
+             font-weight: 600; width: 100%; }
+    .btn-on { background: #2d7a32; color: #fff; }
+    .btn-off { background: #5a2d2d; color: #f0c0c0; }
+    .hours { display: flex; gap: 8px; }
+    .hours button { background: #2a3540; color: #8ab4d4; padding: 9px; }
+    .hours button.sel { background: #2a5c9a; color: #fff; }
+    a.voice { display: block; text-align: center; background: #16202a; color: #8ab4d4;
+              border: 1px solid #243240; border-radius: 12px; padding: 12px; text-decoration: none; }
+    #status { font-size: .82rem; color: #6a7a8a; min-height: 18px; text-align: center; }
+  </style>
+</head>
+<body>
+  <h1>🧠 GEMINI PRO</h1>
+  <div class="agent" id="agent-name">—</div>
+  <div class="card">
+    <div class="row">
+      <span class="state off" id="state">проверяю…</span>
+    </div>
+    <div class="sub" id="remaining"></div>
+    <div class="hours" id="hours">
+      <button data-h="1">1ч</button>
+      <button data-h="3" class="sel">3ч</button>
+      <button data-h="6">6ч</button>
+    </div>
+    <button id="toggle" class="btn-on">Включить Pro</button>
+    <a class="voice" id="voice-link" style="display:none" target="_blank">🎙 Live тренировка</a>
+  </div>
+  <div id="status"></div>
+
+  <script>
+    const tg = window.Telegram?.WebApp; tg?.ready(); tg?.expand();
+    const params = new URLSearchParams(location.search);
+    const agent = params.get('agent') || 'nurse';
+    const titles = { 'gemini-live-nurse':'Медсестра','nurse':'Медсестра','career':'Карьера',
+                     'career-bot':'Карьера','titan':'Титан' };
+    let hours = 3, isOn = false;
+    document.getElementById('agent-name').textContent = 'Агент: ' + (titles[agent] || agent);
+    if (agent === 'titan') {
+      const v = document.getElementById('voice-link');
+      v.href = 'https://voice.shectory.ru/titan.html'; v.style.display = 'block';
+    }
+    const setStatus = m => document.getElementById('status').textContent = m || '';
+
+    document.querySelectorAll('#hours button').forEach(b => b.onclick = () => {
+      document.querySelectorAll('#hours button').forEach(x => x.classList.remove('sel'));
+      b.classList.add('sel'); hours = +b.dataset.h;
+    });
+
+    function render() {
+      const st = document.getElementById('state'), tg2 = document.getElementById('toggle');
+      const rem = document.getElementById('remaining'), hrs = document.getElementById('hours');
+      if (isOn) {
+        st.textContent = 'Pro ВКЛЮЧЁН'; st.className = 'state on';
+        tg2.textContent = 'Выключить'; tg2.className = 'btn-off';
+        hrs.style.display = 'none';
+      } else {
+        st.textContent = 'Pro выключен (база 3.5-flash)'; st.className = 'state off';
+        tg2.textContent = 'Включить Pro'; tg2.className = 'btn-on';
+        hrs.style.display = 'flex';
+      }
+    }
+
+    async function refresh() {
+      try {
+        const r = await fetch('/api/gemini-pro');
+        const d = await r.json();
+        const g = (d.grants || []).find(x => x.agent === agent);
+        isOn = !!g;
+        document.getElementById('remaining').textContent =
+          g ? `осталось ~${Math.round(g.remaining_min)} мин` : '';
+        render();
+      } catch (e) { setStatus('ошибка чтения: ' + e.message); }
+    }
+
+    document.getElementById('toggle').onclick = async () => {
+      setStatus('…');
+      try {
+        const path = isOn ? '/api/gemini-pro/revoke' : '/api/gemini-pro/grant';
+        const body = isOn ? { agent } : { agent, hours };
+        const r = await fetch(path, { method: 'POST',
+          headers: { 'Content-Type': 'application/json',
+                     'X-Telegram-Init-Data': tg?.initData || '' },
+          body: JSON.stringify(body) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        setStatus(isOn ? 'Выключено' : `Включено на ${hours}ч`);
+        await refresh();
+      } catch (e) { setStatus('ошибка: ' + e.message); }
+    };
+
+    refresh();
+  </script>
+</body>
+</html>
