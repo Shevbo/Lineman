@@ -28,8 +28,12 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'("?(?:api[_-]?key|apiKey|x-api-key|botToken|bot[_-]?token|auth[_-]?token|access[_-]?token|client[_-]?secret|secret|password|cred|token)"?\s*[:=]\s*"?)([A-Za-z0-9._\-]{8,})', re.I),
      lambda m: m.group(1) + m.group(2)[:4] + '***REDACTED***'),
 
-    # HTTP headers (Authorization: Bearer ..., x-api-key: ...)
+    # HTTP headers (Authorization: Bearer ..., x-api-key: ...) - more flexible with whitespace
     (re.compile(r'(Authorization\s*:\s*Bearer\s+)([A-Za-z0-9._\-]{12,})', re.I),
+     lambda m: m.group(1) + m.group(2)[:4] + '***REDACTED***'),
+
+    # Generic Bearer token (e.g., if found in body text, not just header)
+    (re.compile(r'(\bBearer\s+)([A-Za-z0-9._\-]{12,})\b', re.I),
      lambda m: m.group(1) + m.group(2)[:4] + '***REDACTED***'),
 
     # Query parameters: key=..., api_key=..., x-goog-api-key=..., access_token=...
@@ -37,12 +41,16 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
      lambda m: m.group(1) + m.group(2)[:4] + '***REDACTED***'),
 
     # OpenAI / Anthropic / OpenRouter prefixes
-    (re.compile(r'\b(sk-(?:proj-|ant-|or-v1-)?[A-Za-z0-9_-]{12,})\b'),
+    (re.compile(r'\b(sk-[A-Za-z0-9_-]{12,})\b'),
      lambda m: m.group(1)[:6] + '***REDACTED***'),
 
-    # Google API keys
+    # Google API keys (AIza)
     (re.compile(r'\b(AIza[A-Za-z0-9_-]{30,})\b'),
      lambda m: m.group(1)[:6] + '***REDACTED***'),
+
+    # Google API keys (AQ.A) - full redaction for security
+    (re.compile(r'([?&]key=)(AQ\.A[A-Za-z0-9._\-]{12,})\b'),
+     lambda m: m.group(1) + '***REDACTED***'),
 
     # Google OAuth ya29 tokens
     (re.compile(r'\b(ya29\.[A-Za-z0-9._\-]{20,})\b'),
@@ -50,6 +58,10 @@ _PATTERNS: list[tuple[re.Pattern, str]] = [
 
     # GitHub PAT / OAuth
     (re.compile(r'\b((?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9_]{20,})\b'),
+     lambda m: m.group(1)[:6] + '***REDACTED***'),
+
+    # Generic long alphanumeric strings — fallback, AFTER all specific patterns
+    (re.compile(r'\b([A-Za-z0-9]{30,})\b'),
      lambda m: m.group(1)[:6] + '***REDACTED***'),
 ]
 
@@ -62,7 +74,6 @@ def mask_secrets(text: str | None) -> str | None:
     for pat, repl in _PATTERNS:
         out = pat.sub(repl, out)
     return out
-
 
 def mask_row(row: dict[str, Any]) -> dict[str, Any]:
     """Mask sensitive fields in a request_log row in place; returns row.

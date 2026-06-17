@@ -10,6 +10,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -161,6 +162,51 @@ def _load_config() -> dict[str, Any]:
 class ProxyServer:
     """Async HTTP forward proxy with routing and API."""
 
+    # Admin-API allowlist: только эти сети могут дёргать /api/* (кроме перечисленных в
+    # _PUBLIC_API_PATHS), /metrics, /state. Снаружи (с публичного интернета) — 403.
+    # Логика: forward-proxy и /proxy/* остаются открыты; админка — только loopback,
+    # WG-federation, Tailscale, докеровские bridges.
+    _ADMIN_ALLOW_NETS = (
+        ipaddress.ip_network("127.0.0.0/8"),
+        ipaddress.ip_network("::1/128"),
+        ipaddress.ip_network("10.66.0.0/24"),     # WG federation
+        ipaddress.ip_network("100.64.0.0/10"),    # Tailscale CGNAT (vibe через Pi)
+        ipaddress.ip_network("172.16.0.0/12"),    # Docker bridges
+    )
+    # API-эндпоинты, у которых есть собственная авторизация (Basic/cookie/initData/HMAC) —
+    # их трогать публично можно. ВСЁ остальное под /api/ закрыто IP-allowlist'ом.
+    _PUBLIC_API_PATHS = frozenset({
+        "/api/login",
+        "/api/logout",
+        "/api/portal-auth-check",
+        "/api/session-check",
+        "/api/tg/miniapp-auth",
+    })
+    # Префиксы публичных API: голосовые аппы (voice.shectory.ru) дёргают /api/gemini-pro/*
+    # и они защищены initData-валидацией внутри handler'а.
+    _PUBLIC_API_PREFIXES = (
+        "/api/gemini-pro",
+    )
+
+    def _is_admin_allowed(self, source_ip: str) -> bool:
+        """True если source_ip из доверенной сети (loopback, WG, Tailscale, docker)."""
+        if not source_ip:
+            return False
+        try:
+            ip = ipaddress.ip_address(source_ip)
+        except ValueError:
+            return False
+        return any(ip in net for net in self._ADMIN_ALLOW_NETS)
+
+    def _path_requires_admin(self, path: str) -> bool:
+        """True если путь нельзя дёргать с публичного интернета."""
+        if path in self._PUBLIC_API_PATHS:
+            return False
+        for pref in self._PUBLIC_API_PREFIXES:
+            if path == pref or path.startswith(pref + "/") or path.startswith(pref + "?"):
+                return False
+        return path.startswith("/api/") or path == "/metrics" or path == "/state"
+
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self._config = config or _load_config()
         proxy_cfg = self._config.get("proxy_server", {})
@@ -291,6 +337,24 @@ class ProxyServer:
             method = parts[0].upper()
             request_path = parts[1]
             request_path_only = request_path.split("?")[0]
+
+            # ИБ-сторож: /api/* (кроме публичных auth-эндпоинтов), /metrics, /state —
+            # только из доверенных сетей. Снаружи (паблик-интернет) — 403 без слива тел.
+            if self._path_requires_admin(request_path_only) and not self._is_admin_allowed(source_ip):
+                logger.warning(
+                    "admin_endpoint_blocked",
+                    path=request_path_only, method=method, source_ip=source_ip,
+                )
+                # Дренируем оставшиеся заголовки чтобы клиент получил clean 403.
+                try:
+                    while True:
+                        hdr = await asyncio.wait_for(rd.readline(), timeout=2)
+                        if hdr in (b"\r\n", b"\n", b""):
+                            break
+                except (asyncio.TimeoutError, Exception):
+                    pass
+                self._send_simple_and_close(wr, 403, {"error": "admin endpoint not reachable from this network"})
+                return
 
             # Management API paths — handle locally
             if request_path_only == "/health":
@@ -1286,7 +1350,9 @@ class ProxyServer:
             f"Content-Type: application/json; charset=utf-8\r\n"
             f"Content-Length: {len(body)}\r\n"
             # CORS: голосовые аппы (voice.shectory.ru) дёргают /api/gemini-pro с initData-заголовком.
-            f"Access-Control-Allow-Origin: *\r\n"
+            # Ужесточено с '*' на конкретный origin: dashboard/voice — свои; attacker.com — нет.
+            f"Access-Control-Allow-Origin: https://voice.shectory.ru\r\n"
+            f"Vary: Origin\r\n"
             f"Access-Control-Allow-Headers: Content-Type, X-Telegram-Init-Data\r\n"
             f"Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
             f"Connection: close\r\n\r\n".encode()
@@ -1912,10 +1978,11 @@ class ProxyServer:
             ],
         }
         body = _json.dumps(payload).encode()
+        # CORS не нужен: эндпоинт admin-only (IP-allowlist), dashboard.shectory.ru
+        # дёргает same-origin через nginx.
         resp = (
             b"HTTP/1.1 200 OK\r\n"
             b"Content-Type: application/json\r\n"
-            b"Access-Control-Allow-Origin: *\r\n"
             + b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n"
             + body
         )
@@ -1938,10 +2005,10 @@ class ProxyServer:
             decisions = self._router.recent_decisions()
 
         body = json.dumps({"decisions": decisions, "count": len(decisions)}).encode()
+        # CORS не нужен: эндпоинт admin-only (IP-allowlist), dashboard same-origin.
         wr.write(
             b"HTTP/1.1 200 OK\r\n"
             b"Content-Type: application/json\r\n"
-            b"Access-Control-Allow-Origin: *\r\n"
             + b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n"
             + body
         )
