@@ -4,6 +4,18 @@ Lineman это **единственный** прокси и сигнальный
 
 ## P0 — нельзя ломать ни в коем случае
 
+### 0. Сетевой барьер management API (`ProxyServer._is_admin_allowed`, `_path_requires_admin`)
+Внесён 2026-06-17 после аудита ИБ №2 (см. [[04_incidents]]). `0.0.0.0:9090` остаётся для federation/forward-proxy, но `/api/*` (кроме явного whitelist'а), `/metrics`, `/state` доступны только из `127/8, ::1, 10.66.0.0/24, 100.64.0.0/10, 172.16/12`.
+
+**Опасные правки:**
+- Добавление нового публичного `/api/*` без явной записи в `_PUBLIC_API_PATHS` или `_PUBLIC_API_PREFIXES` (если эндпоинт имеет свою auth — добавь, иначе оставь admin-only).
+- Расширение `_ADMIN_ALLOW_NETS` (`0.0.0.0/0`, `83.69.248.77`, любая публичная сеть = выкатить request_log наружу).
+- Удаление dispatch-check после `request_path_only = ...` в `_raw_handler` — это единственная точка фильтра.
+- Возврат `Access-Control-Allow-Origin: *` на admin-эндпоинтах (вместе с XSS на dashboard.shectory.ru = слив).
+- Bind `127.0.0.1` (вместо `0.0.0.0`) — сломает WG-федерацию: агенты со sdev/hoster/vibe идут через `10.66.0.1:9090`.
+
+**Тест:** `curl http://83.69.248.77:9090/api/log?limit=1` должен возвращать 403, а `curl http://127.0.0.1:9090/api/log?limit=1` — 200.
+
 ### 1. CONNECT-tunnel handler (`_http_raw.py`)
 Через него ходят: `claude` CLI, agents с `HTTPS_PROXY`, любой клиент с прямым forward proxy. Сломать = убить интерактивную работу всех агентов.
 

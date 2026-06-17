@@ -1,5 +1,30 @@
 # Журнал инцидентов Lineman
 
+## 2026-06-17 — Аудит ИБ №2: management API торчал в публичный интернет без auth
+
+**Симптом:** Сосед в ходе ревью указал на `ourdiary/.env` с реальными ключами. Глубокая проверка вскрыла больше: `proxy_server.host = 0.0.0.0` в config.json, ss подтверждает `LISTEN 0.0.0.0:9090`, `curl http://83.69.248.77:9090/api/log?limit=1` возвращал 200 с дампом `request_log`. То же для `/api/backlog`, `/api/registry`, `/metrics`, `/api/watchdog` и др. В логах живые подключения с публичных сканеров (170.39.193.242, 134.195.157.224). nft `inet filter input` пустая.
+
+**Trigger:** Эволюция API за полгода (от чисто-federation до dashboard/miniapp/builder/backlog) шла без переоценки сетевой модели. CORS `Allow-Origin: *` довешен везде без чёткого разделения public/admin путей. Аудит №1 (предыдущий) пропустил, потому что смотрел только содержимое самой Lineman-репы, не покрывая сетевую поверхность.
+
+**Root cause:** Нет архитектурного разделения «public API» (auth-эндпоинты + миниаппа) и «admin API» (управляющая поверхность). Кодовая база росла как whitelist по path в dispatcher'е, без сетевого фильтра по source_ip.
+
+**Fix:** commit `5378cc7` — IP-allowlist на dispatcher entry. `ProxyServer._is_admin_allowed(source_ip)` + `_path_requires_admin(path)`. Allowlist: `127/8, ::1, 10.66.0.0/24 (WG), 100.64.0.0/10 (TS), 172.16/12 (docker)`. Публично оставлены `/health`, forward-proxy CONNECT, `/proxy/{provider}/*` и явный whitelist API: `/api/login`, `/api/logout`, `/api/portal-auth-check`, `/api/session-check`, `/api/tg/miniapp-auth`, `/api/gemini-pro/*`. CORS `*` → `https://voice.shectory.ru` на gemini-pro (+ `Vary: Origin`), удалён с `/api/routing*` (admin-only, same-origin).
+
+Также в этом же commit:
+- `secret_mask.py`: generic `\b[A-Za-z0-9]{30,}\b` переставлен в конец списка — стоял перед AIza-специфичным и делал его мёртвым кодом.
+
+Smoke после restart `lineman-gateway`: `/api/log` loopback=200/public=403, `/metrics` loopback=200/public=403, `/api/backlog` loopback=200/public=403, `/api/login` public=400 (живой), `/api/gemini-pro/*` public=400 (живой), forward-proxy через iProyal=86.109.80.236, `/proxy/google/v1beta/models`=200, WG `/api/log`=200. pytest 119/119.
+
+**Lesson:**
+1. Аудит ИБ — это «сетевая поверхность × токены × CORS», не только grep по литералам в репе.
+2. При каждом новом `/api/*` сразу решать: public или admin. Public требует своей auth, admin — IP+nginx-уровневой защиты.
+3. `_PUBLIC_API_PATHS` и `_PUBLIC_API_PREFIXES` в `ProxyServer` — единственное место добавлять новые публичные эндпоинты. Если новый /api/* туда не попал — он автоматически admin-only.
+4. См. также [[03_critical_paths]] про `_path_requires_admin`/`_is_admin_allowed` как inviolable invariant.
+
+Парная задача — backlog `b1781682102835` (high): миграция ключей из 9 `.env` приложений в Keymaster. Сейчас файлы 600+gitignore+никогда-не-коммитились, но ротация ключа = руками в 10 файлах.
+
+---
+
 Шаблон записи:
 
 ```
