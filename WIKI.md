@@ -461,6 +461,15 @@ location @login_redirect { return 302 /login?next=$request_uri; }
 - signal_client.py SDK для агентов
 - Пул прокси (proxy1 + iproyal) с route-based selection
 
+## Доступ к LLM федерации через Telegram
+
+Telegram-интерфейс к LLM федерации реализован через **@ShectoryKlodBot**
+(`klod-foreman/klod_tg_bot.py`, systemd-юнит `klod-tg-bot.service`).
+Бот принимает сообщения от Бори, роутит в Sonnet/Opus (с фолбэком Gemini) и
+пишет задачи в backlog. Отдельная Lineman-интеграция для этого не нужна.
+
+---
+
 ### V2 (планируется)
 - `from_agent` по `X-Openclaw-Agent` заголовку или trajectory correlation
 - Мульти-нодный `/api/nodes` (опрос других WG-нод)
