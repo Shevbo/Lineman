@@ -2235,7 +2235,7 @@ class ProxyServer:
 
         try:
             text, elapsed_ms = await self._klod_ask_invoke(
-                path, llm_body, llm_headers)
+                path, llm_body, llm_headers, provider)
         except Exception as e:
             logger.warning("klod_ask_llm_failed", agent=agent, err=str(e)[:160])
             klod_ask.audit_log({
@@ -2280,21 +2280,15 @@ class ProxyServer:
             return ""
 
     async def _klod_ask_invoke(
-        self, path: str, body: dict, headers: dict,
+        self, path: str, body: dict, headers: dict, provider: str,
     ) -> tuple[str, float]:
         """Сделать LLM-вызов через loopback на сам Lineman (/proxy/...).
 
         Возвращает (text, elapsed_ms). Использует self._upstream_session, чтобы
-        не плодить новые TCP-сессии. Логика разбора и провайдер-определение —
-        в klod_ask.extract_text/build_request_payload."""
+        не плодить новые TCP-сессии. Логика разбора — в klod_ask.extract_text.
+        provider передаётся явно из _raw_api_klod_ask, где он уже известен."""
         if self._upstream_session is None:
             raise RuntimeError("upstream session not initialized")
-        if "/proxy/anthropic" in path:
-            provider = "anthropic"
-        elif "/proxy/deepseek" in path:
-            provider = "deepseek"
-        else:
-            provider = "google"
         url = f"http://127.0.0.1:9090{path}"
         t0 = time.monotonic()
         # aiohttp при json=body сам выставит Content-Type — наш дубль убираем.

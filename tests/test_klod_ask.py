@@ -213,6 +213,13 @@ def test_build_payload_lmstudio_openai_compat():
     assert path == "/proxy/lm-studio/v1/chat/completions"
     assert body["model"] == "qwen3.5-9b"
     assert body["messages"][0]["content"] == "hi"
+    assert headers["X-Agent-Name"] == "klod-access"
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_extract_lmstudio_openai_content():
+    resp = {"choices": [{"message": {"content": "привет из lm-studio"}}]}
+    assert klod_ask.extract_text("lm-studio", resp) == "привет из lm-studio"
 
 
 def test_extract_deepseek_reasoning_content_fallback():
