@@ -32,6 +32,7 @@ from rtk import RTK
 from _http_raw import handle_tunnel, handle_http
 from reverse_proxy import handle_reverse_proxy
 from circuit_breaker import CircuitBreaker
+import klod_ask
 from dedup_cache import DedupCache
 from tg_miniapp import validate_init_data, user_id_allowed
 from backlog import BacklogStore, enqueue_builder_ticket
@@ -70,6 +71,31 @@ def build_builder_status(tickets: list, audit: list) -> dict:
         "tickets": shaped,
         "audit": audit[-40:],
     }
+
+
+def apply_builder_answer(items: list, ticket_id: str, answer: str
+                         ) -> tuple[list, int, dict]:
+    """Чистая логика /api/builder/answer. Возвращает (new_items, code, response).
+
+    Ищет тикет с id=ticket_id и status=awaiting_user. Дописывает ответ Бори к
+    task'у, переводит status=queued, очищает awaiting_question. Билдер на следующем
+    tick'е подхватит тикет с расширенным контекстом."""
+    target = None
+    for it in items:
+        if it.get("id") == ticket_id:
+            target = it
+            break
+    if target is None:
+        return items, 404, {"error": "ticket not found"}
+    if target.get("status") != "awaiting_user":
+        return items, 409, {
+            "error": f"ticket not awaiting_user (status={target.get('status')})"
+        }
+    target["task"] = (target.get("task") or "") + "\n\nОтвет Бориса: " + answer
+    target["status"] = "queued"
+    target["awaiting_question"] = ""
+    return items, 200, {"ok": True, "id": ticket_id, "status": "queued"}
+
 
 # SSH config for remote agents (Federation Agent ID to remote host/agent mapping)
 # IMPORTANT: These SSH keys must be pre-authorized on respective hosts from Lineman's host.
@@ -279,6 +305,13 @@ class ProxyServer:
         # Кэш положительных проверок: sha256(email:password) → expires_at.
         self._portal_auth_cache: dict[str, float] = {}
         self._portal_auth_ttl: float = 300.0
+
+        # Klod-Access LLM Gateway (политика Бори 2026-06-18: «доступ к LLM строго
+        # через себя»). Конфиг: config.json → klod_ask. allowed_agents (None|["*"]
+        # |list), budget {default: {per_hour, per_day}, agents: {...}}.
+        self._klod_ask_cfg: dict[str, Any] = self._config.get("klod_ask", {}) or {}
+        # In-memory счётчик (ts, agent) — окно 24ч, trim каждый запрос.
+        self._klod_ask_recent: list[tuple[float, str]] = []
 
         # LLM concurrency queue — prevents cascade overloads under heavy load
         llm_q = proxy_cfg.get("llm_queue", {})
@@ -609,6 +642,15 @@ class ProxyServer:
             elif request_path_only == "/api/build" and method == "POST":
                 # Постановка тикета Билдеру (klod-builder очередь).
                 await self._raw_api_build(rd, wr, request_path)
+                return
+            elif request_path_only == "/api/builder/answer" and method == "POST":
+                # Ответ Бори на уточняющий вопрос Билдера (status awaiting_user → queued).
+                await self._raw_api_builder_answer(rd, wr)
+                return
+            elif request_path_only == "/api/klod/ask" and method == "POST":
+                # Klod-Access LLM Gateway: единый вход для агентов федерации
+                # (политика Бори 2026-06-18). См. klod_ask.py.
+                await self._raw_api_klod_ask(rd, wr)
                 return
             elif request_path_only.startswith("/api/backlog"):
                 # Трекер бэклога Клода (#7): список/добавить/промоут в Билдер/статус.
@@ -1401,6 +1443,9 @@ class ProxyServer:
         chat_id = str(req.get("chat_id", ""))
         text = req.get("text", "")
         parse_mode = req.get("parse_mode", "")
+        # Опциональный inline-keyboard (Telegram API формат). Используется Ключником
+        # для approve/deny кнопок Бори вместо текстовых кодов 'ОК <id>'/'DENY <id>'.
+        reply_markup = req.get("reply_markup")
 
         if not chat_id or not text:
             self._send_json_response(wr, 400, {"ok": False, "error": "chat_id and text required"})
@@ -1465,6 +1510,9 @@ class ProxyServer:
         payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
         if parse_mode:
             payload["parse_mode"] = parse_mode
+        if reply_markup is not None:
+            # Pass-through: Telegram сам валидирует структуру (inline_keyboard и т.п.)
+            payload["reply_markup"] = reply_markup
 
         # Set optimistically before await to prevent concurrent bypass
         self._tg_rate[account] = time.time()
@@ -2070,6 +2118,211 @@ class ProxyServer:
             return self._send_simple_and_close(wr, 500, {"error": str(e)[:200]})
         logger.info("builder_ticket", id=tid, repo=repo, from_=frm)
         self._send_simple_and_close(wr, 200, {"status": "ok", "id": tid, "queued": len(items)})
+
+    async def _raw_api_builder_answer(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+    ) -> None:
+        """POST /api/builder/answer  body={"ticket_id": "tNNN", "answer": "..."}.
+
+        Снимает AWAITING_USER: ищет тикет в очереди klod-builder, дописывает ответ
+        Бори к task'у и переводит status=queued. Билдер на следующем tick подхватит
+        тикет уже с контекстом и попытается выполнить."""
+        headers = await self._read_headers(rd)
+        clen = int(headers.get("content-length", "0") or "0")
+        raw = await asyncio.wait_for(rd.read(min(clen, 65536)), timeout=10) if clen > 0 else b""
+        try:
+            body = json.loads(raw) if raw else {}
+        except Exception:
+            body = {}
+        tid = str(body.get("ticket_id") or body.get("id") or "").strip()
+        answer = str(body.get("answer") or "").strip()
+        if not tid or not answer:
+            return self._send_simple_and_close(
+                wr, 400, {"error": "need ticket_id and answer"})
+
+        qpath = os.path.expanduser(
+            os.environ.get("BUILDER_QUEUE", "~/.builder/queue.json"))
+        try:
+            items = json.loads(open(qpath).read()) if os.path.exists(qpath) else []
+        except Exception:
+            items = []
+        new_items, code, resp = apply_builder_answer(items, tid, answer)
+        if code == 200:
+            try:
+                with open(qpath, "w") as f:
+                    f.write(json.dumps(new_items, ensure_ascii=False, indent=1))
+            except Exception as e:
+                return self._send_simple_and_close(wr, 500, {"error": str(e)[:200]})
+            logger.info("builder_answer", id=tid, len=len(answer))
+        self._send_simple_and_close(wr, code, resp)
+
+    async def _raw_api_klod_ask(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+    ) -> None:
+        """POST /api/klod/ask — единая точка LLM-доступа для агентов федерации.
+
+        Body: {"agent": "career-bot", "prompt": "...",
+               "model_hint": "fast|normal|deep|gemini-flash|gemini-pro",
+               "max_tokens": 1000}
+        Возвращает: {"text": "...", "model_used": "...", "agent": "..."}.
+
+        Политика Бори 2026-06-18: агенты не дёргают /proxy/anthropic|google
+        напрямую — только через Klod. Здесь — allowlist агентов, бюджет
+        per-agent и от-Klod-имени вызов LLM. См. klod_ask.py + memory
+        llm-access-through-klod-only.md."""
+        headers = await self._read_headers(rd)
+        clen = int(headers.get("content-length", "0") or "0")
+        raw = await asyncio.wait_for(
+            rd.read(min(clen, 65536)), timeout=15
+        ) if clen > 0 else b""
+        try:
+            body = json.loads(raw) if raw else {}
+            if not isinstance(body, dict):
+                body = {}
+        except Exception:
+            return self._send_simple_and_close(wr, 400, {"error": "bad JSON"})
+
+        agent = str(
+            body.get("agent")
+            or headers.get("x-agent-name")
+            or ""
+        ).strip()
+        prompt = str(body.get("prompt") or "").strip()
+        hint = (body.get("model_hint") or "").strip().lower() or None
+        explicit_provider = (body.get("provider") or "").strip().lower()
+        explicit_model = (body.get("model") or "").strip()
+        max_tokens = klod_ask.clamp_max_tokens(body.get("max_tokens"))
+
+        cfg = self._klod_ask_cfg
+        if not klod_ask.is_agent_allowed(agent, cfg.get("allowed_agents")):
+            return self._send_simple_and_close(
+                wr, 403, {"error": f"agent {agent!r} not in allowlist"})
+        if not prompt:
+            return self._send_simple_and_close(wr, 400, {"error": "need prompt"})
+
+        now = time.time()
+        ok, reason = klod_ask.check_budget(
+            agent, self._klod_ask_recent, cfg.get("budget", {}), now)
+        if not ok:
+            klod_ask.audit_log({
+                "ts": now, "agent": agent, "model": None, "ok": False,
+                "blocked_by": "budget", "reason": reason,
+            })
+            return self._send_simple_and_close(wr, 429, {"error": reason})
+
+        if explicit_provider and explicit_model:
+            try:
+                provider, model_id = klod_ask.resolve_explicit(explicit_provider, explicit_model)
+            except ValueError as e:
+                return self._send_simple_and_close(wr, 400, {"error": str(e)})
+        else:
+            provider, model_id = klod_ask.resolve_model(hint)
+        path, llm_body, llm_headers = klod_ask.build_request_payload(
+            provider, model_id, prompt, max_tokens)
+
+        # Anthropic требует Bearer OAuth Боры (как у klod_tg_bot и escalate.py).
+        if provider == "anthropic":
+            tok = self._load_klod_oauth_token()
+            if not tok:
+                return self._send_simple_and_close(
+                    wr, 503, {"error": "klod anthropic oauth not available"})
+            llm_headers["Authorization"] = f"Bearer {tok}"
+            llm_headers["anthropic-beta"] = "oauth-2025-04-20"
+
+        try:
+            text, elapsed_ms = await self._klod_ask_invoke(
+                path, llm_body, llm_headers)
+        except Exception as e:
+            logger.warning("klod_ask_llm_failed", agent=agent, err=str(e)[:160])
+            klod_ask.audit_log({
+                "ts": now, "agent": agent, "model": model_id, "ok": False,
+                "error": str(e)[:200],
+            })
+            return self._send_simple_and_close(
+                wr, 502, {"error": f"llm call failed: {str(e)[:160]}"})
+
+        # Запись бюджета только при успехе — failed-вызовы не съедают квоту.
+        self._klod_ask_recent.append((now, agent))
+        self._klod_ask_recent = klod_ask.trim_recent(self._klod_ask_recent, now)
+
+        klod_ask.audit_log({
+            "ts": now, "agent": agent, "model": model_id,
+            "prompt_len": len(prompt), "answer_len": len(text),
+            "elapsed_ms": elapsed_ms, "ok": True,
+        })
+        logger.info(
+            "klod_ask", agent=agent, model=model_id,
+            prompt_len=len(prompt), answer_len=len(text),
+            elapsed_ms=int(elapsed_ms),
+        )
+        self._send_simple_and_close(wr, 200, {
+            "text": text,
+            "model_used": model_id,
+            "provider": provider,
+            "agent": agent,
+            "elapsed_ms": int(elapsed_ms),
+        })
+
+    def _load_klod_oauth_token(self) -> str:
+        """Bearer-токен Klod-Access для Anthropic — из ~/.claude/.credentials.json.
+
+        Та же кредуха, что использует klod_tg_bot и escalate.complain():
+        OAuth Бори, гонится от имени Klod через Lineman /proxy/anthropic."""
+        try:
+            creds_path = Path.home() / ".claude/.credentials.json"
+            d = json.loads(creds_path.read_text())
+            return (d.get("claudeAiOauth") or {}).get("accessToken", "")
+        except Exception:
+            return ""
+
+    async def _klod_ask_invoke(
+        self, path: str, body: dict, headers: dict,
+    ) -> tuple[str, float]:
+        """Сделать LLM-вызов через loopback на сам Lineman (/proxy/...).
+
+        Возвращает (text, elapsed_ms). Использует self._upstream_session, чтобы
+        не плодить новые TCP-сессии. Логика разбора и провайдер-определение —
+        в klod_ask.extract_text/build_request_payload."""
+        if self._upstream_session is None:
+            raise RuntimeError("upstream session not initialized")
+        if "/proxy/anthropic" in path:
+            provider = "anthropic"
+        elif "/proxy/deepseek" in path:
+            provider = "deepseek"
+        else:
+            provider = "google"
+        url = f"http://127.0.0.1:9090{path}"
+        t0 = time.monotonic()
+        # aiohttp при json=body сам выставит Content-Type — наш дубль убираем.
+        clean_headers = {k: v for k, v in headers.items()
+                         if k.lower() != "content-type"}
+        try:
+            async with self._upstream_session.post(
+                url, json=body, headers=clean_headers,
+                timeout=aiohttp.ClientTimeout(total=90),
+            ) as resp:
+                raw = await resp.read()
+                elapsed_ms = (time.monotonic() - t0) * 1000.0
+                if resp.status != 200:
+                    raise RuntimeError(
+                        f"upstream HTTP {resp.status}: {raw[:200].decode('utf-8','replace')}")
+                try:
+                    data = json.loads(raw or b"{}")
+                except Exception as e:
+                    raise RuntimeError(
+                        f"upstream non-JSON response: {str(e)} body={raw[:120]!r}")
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"upstream timeout (>90s) on {path}")
+        except aiohttp.ClientError as e:
+            raise RuntimeError(f"upstream client error: {type(e).__name__}: {str(e) or '<empty>'}")
+        text = klod_ask.extract_text(provider, data)
+        if not text:
+            raise RuntimeError(f"empty LLM response: {json.dumps(data)[:200]}")
+        return text, elapsed_ms
 
     async def _raw_api_backlog(
         self,
