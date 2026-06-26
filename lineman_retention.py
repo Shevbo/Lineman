@@ -8,7 +8,7 @@ log = logging.getLogger(__name__)
 DB = os.path.expanduser('~/workspaces/infra/lineman/lineman.db')
 NOW = datetime.datetime.now(datetime.timezone.utc)
 BODY_RETAIN_DAYS = 7
-ROW_RETAIN_DAYS = 90
+ROW_RETAIN_DAYS = 14
 
 def run():
     body_cutoff = (NOW - datetime.timedelta(days=BODY_RETAIN_DAYS)).isoformat()

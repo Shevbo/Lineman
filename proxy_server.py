@@ -233,6 +233,17 @@ class ProxyServer:
                 return False
         return path.startswith("/api/") or path == "/metrics" or path == "/state"
 
+    def _is_forward_proxy(self, method: str, request_path: str) -> bool:
+        """True если это forward-proxy запрос (CONNECT-туннель или absolute-URI HTTP).
+
+        Forward proxy предназначен только для агентов федерации (через WG/TS/loopback).
+        Снаружи :9090 абузят как open-proxy для скрапинга/спама — гейтим по source_ip.
+        Реверс-прокси /proxy/{provider}/* сюда не попадает (обрабатывается раньше).
+        """
+        if method == "CONNECT":
+            return True
+        return request_path.startswith("http://") or request_path.startswith("https://")
+
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self._config = config or _load_config()
         proxy_cfg = self._config.get("proxy_server", {})
@@ -387,6 +398,25 @@ class ProxyServer:
                 except (asyncio.TimeoutError, Exception):
                     pass
                 self._send_simple_and_close(wr, 403, {"error": "admin endpoint not reachable from this network"})
+                return
+
+            # ИБ-сторож forward-proxy: CONNECT-туннель и absolute-URI HTTP-проксирование —
+            # только из доверенных сетей (federation через WG/TS/loopback). Снаружи :9090
+            # абузили как open-proxy для скрапинга/спама (инцидент 2026-06-26).
+            # Реверс /proxy/{provider}/* не затронут (матчится в elif ниже и не доходит сюда).
+            if self._is_forward_proxy(method, request_path) and not self._is_admin_allowed(source_ip):
+                logger.warning(
+                    "forward_proxy_blocked",
+                    path=request_path, method=method, source_ip=source_ip,
+                )
+                try:
+                    while True:
+                        hdr = await asyncio.wait_for(rd.readline(), timeout=2)
+                        if hdr in (b"\r\n", b"\n", b""):
+                            break
+                except (asyncio.TimeoutError, Exception):
+                    pass
+                self._send_simple_and_close(wr, 403, {"error": "forward proxy not reachable from this network"})
                 return
 
             # Management API paths — handle locally

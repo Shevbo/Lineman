@@ -1,5 +1,31 @@
 # Журнал инцидентов Lineman
 
+## 2026-06-26 — Диск smain 86%: request_log раздулся до 8.8M строк + forward-proxy абузят извне
+
+**Симптом:** Борис: «диск кончается на smain». df: `/` 86% (57G/67G). Крупнейшие пожиратели: `lineman.db` 2.0G + `lineman.db-wal` 2.0G (high-water, не усекался), `.git` домашнего репо 3.1G (мусорные недостижимые объекты), `.trash-by-klod` 1.3G.
+
+**Trigger:** `lineman_retention.py` имел `ROW_RETAIN_DAYS=90`. Данные с 2026-05-07 (50 дней) — порог 90д ни разу не сработал, строки копились. Ингест ~275k строк/день (тело запросов всего 15MB — раздув от ЧИСЛА строк метаданных, ~230 байт/строка × 8.8M ≈ 2GB). Спайк 2026-06-20..23 до 790k/день.
+
+**Root cause роста:** retention 90д несовместим с реальным объёмом трафика. Главный источник объёма — внешний абуз forward-proxy: `65.108.40.195` (2.6M строк → solebox/bol/vans/mediamarkt, скрапинг ритейла), `134.195.158.62` (1.5M, 99.9% ошибок 502 → cqsqwl.com/qrb6.com/ey789.cn — спам-домены), `208.82.63.245`, `134.195.157.224`. Ни один не в node_map. Это НЕ federation (та через WG 10.66.x).
+
+**Fix (выполнено 2026-06-26):**
+- `lineman_retention.py`: `ROW_RETAIN_DAYS` 90 → 14 (БД стабилизируется ~3.8M строк). Прогнан вручную: 8.8M → 5.7M строк, db 2.0G → 1.4G после VACUUM+checkpoint. ⚠️ uncommitted на момент записи.
+- `PRAGMA wal_checkpoint(TRUNCATE)` дважды — WAL 2.0G → 0. ВАЖНО: VACUUM на живой WAL-БД (днём, с активными читателями) раздувает WAL до ~1.7G; всегда делать `wal_checkpoint(TRUNCATE)` после ручного VACUUM.
+- `git gc --aggressive` домашнего репо: .git 3.1G → 920K.
+- Корзина `.trash-by-klod` очищена (1.3G).
+- Итог: диск 86% → 75%, свободно 10G → 17G.
+
+**Forward-proxy open-proxy абуз — ЗАКРЫТО (2026-06-26, по команде Бориса):** фикс `5378cc7` (инцидент 06-17) закрыл admin-API IP-allowlist'ом, но CONNECT-туннель и absolute-URI HTTP-проксирование оставались public. Внешние IP (5.22M строк из 5.7M = 91% БД!) абузили :9090 как open-proxy.
+- `proxy_server.py`: новый `_is_forward_proxy(method, request_path)` (True для CONNECT и `http(s)://` absolute-URI). Gate в `_raw_handler` сразу после admin-gate: forward-proxy запрос И `not _is_admin_allowed(source_ip)` → drain + 403 `forward_proxy_blocked`. Доверенные сети те же `_ADMIN_ALLOW_NETS` (127/8, ::1, 10.66/24 WG, 100.64/10 TS, 172.16/12 docker). Реверс `/proxy/{provider}/*` НЕ затронут (матчится в elif выше, не доходит до gate).
+- Тесты: `tests/test_forward_proxy_gate.py` (8 шт). pytest 169 зелёных.
+- БД: удалены все строки с публичным source_host (5.22M), VACUUM → ~514k строк (только smain/9733/hoster/sdev/pi2), db ужата до ~0.13G.
+
+**Lesson:**
+1. retention-окно должно соответствовать ингесту, не «на глаз». При 275k/день даже 14д = ~1GB.
+2. Ручной VACUUM в WAL-режиме днём раздувает WAL — обязателен последующий checkpoint(TRUNCATE). Ночной cron (3:00) чище, т.к. читателей меньше.
+3. `.git` home-репо растёт недостижимыми объектами — периодический `git gc`.
+4. open-proxy абуз = и ресурс, и ИБ. CONNECT без auth/allowlist — открытая дыра.
+
 ## 2026-06-17 — Аудит ИБ №2: management API торчал в публичный интернет без auth
 
 **Симптом:** Сосед в ходе ревью указал на `ourdiary/.env` с реальными ключами. Глубокая проверка вскрыла больше: `proxy_server.host = 0.0.0.0` в config.json, ss подтверждает `LISTEN 0.0.0.0:9090`, `curl http://83.69.248.77:9090/api/log?limit=1` возвращал 200 с дампом `request_log`. То же для `/api/backlog`, `/api/registry`, `/metrics`, `/api/watchdog` и др. В логах живые подключения с публичных сканеров (170.39.193.242, 134.195.157.224). nft `inet filter input` пустая.
