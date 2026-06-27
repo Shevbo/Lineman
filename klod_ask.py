@@ -30,6 +30,12 @@ MODEL_PRESETS: dict[str, tuple[str, str]] = {
     "gemini-flash":   ("google",    "gemini-2.5-flash"),
     "gemini-flash-lite": ("google", "gemini-2.5-flash-lite"),
     "gemini-pro":     ("google",    "gemini-2.5-pro"),
+    # Gemini 3.x — thinking-модели Google. Жгут больше токенов на reasoning, max_tokens
+    # ставь ≥ 256 иначе ответ пустой (всё ушло в thoughtsTokenCount).
+    "gemini-3-pro":   ("google",    "gemini-3-pro-preview"),
+    "gemini-3.1-pro": ("google",    "gemini-3.1-pro-preview"),
+    # Vision/object-detection: bbox с нормализованными координатами на изображении.
+    "gemini-3-vision": ("google",   "gemini-3-pro-image-preview"),
     # DeepSeek через Lineman /proxy/deepseek (OpenAI-compat /v1/chat/completions).
     # deepseek-fast = быстрая модель chat. deepseek-reason = reasoning для критика/анализа.
     "deepseek-fast":  ("deepseek",  "deepseek-chat"),
@@ -38,8 +44,8 @@ MODEL_PRESETS: dict[str, tuple[str, str]] = {
 
 VALID_PROVIDERS = {"anthropic", "google", "deepseek", "lm-studio"}
 
-DEFAULT_BUDGET_PER_HOUR = 30
-DEFAULT_BUDGET_PER_DAY = 200
+DEFAULT_BUDGET_PER_HOUR = 300
+DEFAULT_BUDGET_PER_DAY = 5000
 DEFAULT_MAX_TOKENS = 1000
 HARD_MAX_TOKENS = 4000  # выше — отбиваем 400, чтобы агент не выжег квоту
 

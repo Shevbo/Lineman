@@ -18,8 +18,20 @@ def test_resolve_model_unknown_hint_falls_to_normal():
 
 def test_resolve_model_all_presets():
     for k in ("fast", "normal", "deep", "gemini-flash", "gemini-flash-lite",
-              "gemini-pro", "deepseek-fast", "deepseek-reason"):
+              "gemini-pro", "gemini-3-pro", "gemini-3.1-pro", "gemini-3-vision",
+              "deepseek-fast", "deepseek-reason"):
         assert klod_ask.resolve_model(k) == klod_ask.MODEL_PRESETS[k]
+
+
+def test_resolve_model_gemini_3_targets():
+    assert klod_ask.resolve_model("gemini-3-pro")   == ("google", "gemini-3-pro-preview")
+    assert klod_ask.resolve_model("gemini-3.1-pro") == ("google", "gemini-3.1-pro-preview")
+    assert klod_ask.resolve_model("gemini-3-vision") == ("google", "gemini-3-pro-image-preview")
+
+
+def test_resolve_model_legacy_pro_still_2_5():
+    # gemini-pro без версии остаётся 2.5 (стабильная не-thinking модель).
+    assert klod_ask.resolve_model("gemini-pro") == ("google", "gemini-2.5-pro")
 
 
 def test_resolve_model_flash_lite():
