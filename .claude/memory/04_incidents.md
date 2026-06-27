@@ -1,5 +1,18 @@
 # Журнал инцидентов Lineman
 
+## 2026-06-27 — Klod push-channel для агентов (feature)
+
+**Что:** двусторонняя доставка reply от Klod к агентам через push-URL (раньше только pull `/outbox`).
+- `klod_inbox.set_push_url(agent, url)` / `load_push_urls()` / хранилище `~/klod-access/push_urls.json` (атомарная запись).
+- `deliver_reply`: POST на зарегистрированный URL (timeout 5с, JSON payload `{from,to,id,in_reply_to,ts,message}`, header `X-Klod-Channel: push`). Нет URL / 4xx / 5xx / exception → fallback на старый GET `/api/agent/<to>/message`. Запись в outbox всегда — pull продолжает работать.
+- Новые ручки в `proxy_server._raw_api_klod_access`: `POST /api/agent/klod-access/push_url?agent=&url=` (пустой `url` снимает), `GET /api/agent/klod-access/push_urls`.
+- Тесты: `tests/test_klod_push.py` (6 шт). Сюита: 169 → 175 passed.
+- Skill `/onboarding` (~/.claude/skills/onboarding) step 6.2 = `register_push.sh` — автоматически регистрирует push если в `.onboarding/AGENT.md` есть поле `push_endpoint:`. Канон §3.1 описывает payload-контракт.
+
+**Зачем:** убрать ~5 мин лаг pull-режима для агентов с HTTP-сервером (qaper/selfcoder/eshkola). Pull остаётся как fallback и для bash-агентов без сервера.
+
+**Безопасность:** валидация URL `^https?://...$`. Push идёт ИЗ Lineman НА агента — не открывает новых дыр в Lineman. Агент сам фильтрует входящие POST по `X-Klod-Channel: push`.
+
 ## 2026-06-26 — Диск smain 86%: request_log раздулся до 8.8M строк + forward-proxy абузят извне
 
 **Симптом:** Борис: «диск кончается на smain». df: `/` 86% (57G/67G). Крупнейшие пожиратели: `lineman.db` 2.0G + `lineman.db-wal` 2.0G (high-water, не усекался), `.git` домашнего репо 3.1G (мусорные недостижимые объекты), `.trash-by-klod` 1.3G.

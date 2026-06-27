@@ -39,6 +39,9 @@ INBOX_DIR = Path.home() / "klod-access"
 INBOX_FILE = INBOX_DIR / "inbox.jsonl"
 OUTBOX_FILE = INBOX_DIR / "outbox.jsonl"
 COUNTER_FILE = INBOX_DIR / "counter.txt"
+PUSH_URLS_FILE = INBOX_DIR / "push_urls.json"
+
+_PUSH_URL_RE = re.compile(r"^https?://[A-Za-z0-9._:\-]+(/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*)?$")
 
 DB_PATH = Path(__file__).resolve().parent / "lineman.db"
 
@@ -206,23 +209,76 @@ def read_outbox(since: int = 0, limit: int = 50, to: str | None = None) -> list[
     return out[-limit:]
 
 
+def load_push_urls() -> dict[str, str]:
+    """Read the agent_id → push_url map. Returns empty dict if file missing or malformed."""
+    if not PUSH_URLS_FILE.exists():
+        return {}
+    try:
+        data = json.loads(PUSH_URLS_FILE.read_text(encoding="utf-8"))
+        return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+    except Exception:
+        return {}
+
+
+def set_push_url(agent: str, url: str | None) -> dict[str, str]:
+    """Register (or remove if url is None/empty) a push_url for an agent. Atomic write."""
+    if not agent or not isinstance(agent, str):
+        raise ValueError("agent required")
+    urls = load_push_urls()
+    if url:
+        if not _PUSH_URL_RE.match(url):
+            raise ValueError(f"invalid push_url: {url!r}")
+        urls[agent] = url
+    else:
+        urls.pop(agent, None)
+    _ensure_dir()
+    tmp = PUSH_URLS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(urls, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(PUSH_URLS_FILE)
+    return urls
+
+
 async def deliver_reply(to_agent: str, message: str,
-                        session: aiohttp.ClientSession | None = None) -> tuple[bool, str | None]:
-    """Forward the reply through Lineman's own /api/agent/{to}/message endpoint."""
-    from urllib.parse import urlencode
-    qs = urlencode({"from": "klod-access", "message": message})
-    url = f"http://127.0.0.1:9090/api/agent/{to_agent}/message?{qs}"
-    own_session = False
+                        session: aiohttp.ClientSession | None = None,
+                        record_id: int | None = None,
+                        in_reply_to: int | None = None) -> tuple[bool, str | None]:
+    """Push reply to the agent's registered HTTP endpoint if any.
+    Falls back to the legacy in-Lineman forward if no push_url is registered,
+    so agents that never registered keep working unchanged (pull via /outbox)."""
+    push_url = load_push_urls().get(to_agent)
+    own_session = session is None
     if session is None:
         session = aiohttp.ClientSession()
-        own_session = True
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-            ok = 200 <= resp.status < 300
-            err = None if ok else f"HTTP {resp.status}"
-            return ok, err
-    except Exception as e:
-        return False, str(e)
+        if push_url:
+            payload = {
+                "from": "klod-access",
+                "to": to_agent,
+                "id": record_id,
+                "in_reply_to": in_reply_to,
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "message": message,
+            }
+            try:
+                async with session.post(
+                    push_url, json=payload,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                    headers={"X-Klod-Channel": "push"},
+                ) as resp:
+                    ok = 200 <= resp.status < 300
+                    return ok, None if ok else f"push HTTP {resp.status}"
+            except Exception as e:
+                return False, f"push exc: {e}"
+        # Fallback: legacy in-Lineman forward
+        from urllib.parse import urlencode
+        qs = urlencode({"from": "klod-access", "message": message})
+        url = f"http://127.0.0.1:9090/api/agent/{to_agent}/message?{qs}"
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                ok = 200 <= resp.status < 300
+                return ok, None if ok else f"fwd HTTP {resp.status}"
+        except Exception as e:
+            return False, f"fwd exc: {e}"
     finally:
         if own_session:
             await session.close()

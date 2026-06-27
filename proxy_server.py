@@ -1155,7 +1155,9 @@ class ProxyServer:
                 # best-effort в фоне, не блокирует ответ.
                 rec = klod_inbox.write_outbox(to_agent, msg, in_reply_to, delivered=None)
                 try:
-                    asyncio.create_task(klod_inbox.deliver_reply(to_agent, msg))
+                    asyncio.create_task(klod_inbox.deliver_reply(
+                        to_agent, msg, record_id=rec["id"], in_reply_to=in_reply_to,
+                    ))
                 except Exception:
                     pass
                 return self._send_simple_and_close(wr, 200, {
@@ -1169,6 +1171,33 @@ class ProxyServer:
                 to = q("to") or None
                 msgs = klod_inbox.read_outbox(since, limit, to=to)
                 return self._send_simple_and_close(wr, 200, {"messages": msgs})
+
+            if method == "POST" and suffix == "push_url":
+                # Register/clear an agent's push endpoint. Body JSON {"agent":"x","url":"http://..."}
+                # or query: ?agent=x&url=... (empty url → unregister).
+                agent = q("agent")
+                url_val = q("url")
+                if body_bytes:
+                    try:
+                        body = json.loads(body_bytes)
+                        agent = agent or body.get("agent", "")
+                        url_val = url_val or body.get("url", "")
+                    except Exception:
+                        pass
+                if not agent:
+                    return self._send_simple_and_close(wr, 400, {"error": "missing 'agent'"})
+                try:
+                    urls = klod_inbox.set_push_url(agent, url_val or None)
+                except ValueError as ve:
+                    return self._send_simple_and_close(wr, 400, {"error": str(ve)})
+                logger.info("klod_push_url_set", agent=agent, cleared=not bool(url_val))
+                return self._send_simple_and_close(wr, 200, {
+                    "status": "ok", "agent": agent,
+                    "registered": agent in urls, "url": urls.get(agent),
+                })
+
+            if method == "GET" and suffix == "push_urls":
+                return self._send_simple_and_close(wr, 200, {"urls": klod_inbox.load_push_urls()})
 
             self._send_simple_and_close(wr, 404, {"error": "unknown klod-access route"})
         except Exception as e:
