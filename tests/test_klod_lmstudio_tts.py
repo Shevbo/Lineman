@@ -31,6 +31,41 @@ def test_lm_studio_request_uses_openai_compat_path():
     assert body["messages"][0]["content"] == "ping"
 
 
+def test_lm_studio_context_size_passed_through():
+    """context_size попадает в body LM Studio как `context_length`. Для cloud — игнорится."""
+    _, body, _ = klod_ask.build_request_payload_with_ctx(
+        "lm-studio", "qwen/qwen3.5-9b", "ping", 100, context_size=16384)
+    assert body.get("context_length") == 16384
+
+    _, body2, _ = klod_ask.build_request_payload_with_ctx(
+        "google", "gemini-2.5-pro", "ping", 100, context_size=16384)
+    assert "context_length" not in body2
+
+    _, body3, _ = klod_ask.build_request_payload_with_ctx(
+        "lm-studio", "qwen/qwen3.5-9b", "ping", 100, context_size=None)
+    assert "context_length" not in body3
+
+
+def test_gemini_3_flash_hints():
+    assert klod_ask.resolve_model("gemini-3-flash")        == ("google", "gemini-3-flash-preview")
+    assert klod_ask.resolve_model("gemini-3.5-flash")      == ("google", "gemini-3.5-flash")
+    assert klod_ask.resolve_model("gemini-3.1-flash-lite") == ("google", "gemini-3.1-flash-lite")
+    assert klod_ask.resolve_model("gemini-3.1-flash-image") == ("google", "gemini-3.1-flash-image")
+
+
+def test_anthropic_extra_hints():
+    assert klod_ask.resolve_model("fable")    == ("anthropic", "claude-fable-5")
+    assert klod_ask.resolve_model("opus-4-7") == ("anthropic", "claude-opus-4-7")
+
+
+def test_deepseek_v4_hints():
+    assert klod_ask.resolve_model("deepseek-v4-flash") == ("deepseek", "deepseek-v4-flash")
+    assert klod_ask.resolve_model("deepseek-v4-pro")   == ("deepseek", "deepseek-v4-pro")
+    # legacy aliases должны работать
+    assert klod_ask.resolve_model("deepseek-fast")     == ("deepseek", "deepseek-chat")
+    assert klod_ask.resolve_model("deepseek-reason")   == ("deepseek", "deepseek-reasoner")
+
+
 # -------- TTS resolve --------
 
 def test_resolve_tts_defaults_to_pro():

@@ -27,6 +27,8 @@ MODEL_PRESETS: dict[str, tuple[str, str]] = {
     "fast":           ("anthropic", "claude-haiku-4-5-20251001"),
     "normal":         ("anthropic", "claude-sonnet-4-6"),
     "deep":           ("anthropic", "claude-opus-4-8"),
+    "fable":          ("anthropic", "claude-fable-5"),       # экспериментальная creative-writing
+    "opus-4-7":       ("anthropic", "claude-opus-4-7"),      # явный pin (на сезон когда 4-8 в 429)
     "gemini-flash":   ("google",    "gemini-2.5-flash"),
     "gemini-flash-lite": ("google", "gemini-2.5-flash-lite"),
     "gemini-pro":     ("google",    "gemini-2.5-pro"),
@@ -34,12 +36,21 @@ MODEL_PRESETS: dict[str, tuple[str, str]] = {
     # ставь ≥ 256 иначе ответ пустой (всё ушло в thoughtsTokenCount).
     "gemini-3-pro":   ("google",    "gemini-3-pro-preview"),
     "gemini-3.1-pro": ("google",    "gemini-3.1-pro-preview"),
+    # Gemini 3.x flash — быстрее и дешевле чем Pro, без thinking-overhead.
+    "gemini-3-flash":      ("google", "gemini-3-flash-preview"),
+    "gemini-3.5-flash":    ("google", "gemini-3.5-flash"),         # legacy alias, всё ещё живой
+    "gemini-3.1-flash-lite": ("google", "gemini-3.1-flash-lite"),  # самый дешёвый Gemini 3.x
     # Vision/object-detection: bbox с нормализованными координатами на изображении.
-    "gemini-3-vision": ("google",   "gemini-3-pro-image-preview"),
+    "gemini-3-vision":        ("google", "gemini-3-pro-image-preview"),
+    "gemini-3.1-flash-image": ("google", "gemini-3.1-flash-image"),  # image generation
     # DeepSeek через Lineman /proxy/deepseek (OpenAI-compat /v1/chat/completions).
-    # deepseek-fast = быстрая модель chat. deepseek-reason = reasoning для критика/анализа.
-    "deepseek-fast":  ("deepseek",  "deepseek-chat"),
-    "deepseek-reason": ("deepseek", "deepseek-reasoner"),
+    # 2026-Q2: DeepSeek переименовал линейку — chat→v4-flash, reasoner→v4-pro. Старые
+    # имена ещё работают как алиасы (Lineman держит обратную совместимость), но новые
+    # хинты ниже идут к актуальным id.
+    "deepseek-fast":     ("deepseek", "deepseek-chat"),      # legacy alias → v4-flash
+    "deepseek-reason":   ("deepseek", "deepseek-reasoner"),  # legacy alias → v4-pro
+    "deepseek-v4-flash": ("deepseek", "deepseek-v4-flash"),
+    "deepseek-v4-pro":   ("deepseek", "deepseek-v4-pro"),
     # LM Studio — локальные модели на 192.168.1.70:1234 (SSH-туннель smain:127.0.0.1:1234).
     # Без сети, без квот, без денег. Подходит для batch/parsing/test-фикстур; для frontier
     # reasoning всё равно cloud. Список синхронизирован с `curl :1234/v1/models` 2026-06-28.
@@ -200,6 +211,21 @@ def build_request_payload(provider: str, model_id: str, prompt: str,
         headers = {"Content-Type": "application/json", "X-Agent-Name": "klod-access"}
         return path, body, headers
     raise ValueError(f"unknown provider: {provider}")
+
+
+def build_request_payload_with_ctx(provider: str, model_id: str, prompt: str,
+                                    max_tokens: int, context_size: int | None = None,
+                                   ) -> tuple[str, dict, dict]:
+    """Thin wrapper over build_request_payload: для LM Studio пробрасывает context_size
+    как extra-поле (LM Studio JIT-load с заданным n_ctx). Для cloud-провайдеров параметр
+    игнорится (Anthropic/Google/DeepSeek контекст в API не настраивается per-request)."""
+    path, body, headers = build_request_payload(provider, model_id, prompt, max_tokens)
+    if provider == "lm-studio" and isinstance(context_size, int) and context_size > 0:
+        # LM Studio (v0.3+) при JIT-load учитывает поле "context_length" в первом запросе
+        # с этой моделью. Если модель уже загружена с другим n_ctx — LM Studio оставит её
+        # как есть; для реальной перезагрузки нужна /api/klod/local/reload.
+        body["context_length"] = context_size
+    return path, body, headers
 
 
 def resolve_tts(hint: Optional[str]) -> tuple[str, str]:

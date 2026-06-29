@@ -677,6 +677,8 @@ class ProxyServer:
                 # Ответ Бори на уточняющий вопрос Билдера (status awaiting_user → queued).
                 await self._raw_api_builder_answer(rd, wr)
                 return
+            elif request_path_only == "/api/klod/models" and method == "GET":
+                await self._raw_api_klod_models(rd, wr)
             elif request_path_only == "/api/klod/tts" and method == "POST":
                 await self._raw_api_klod_tts(rd, wr)
             elif request_path_only == "/api/klod/ask" and method == "POST":
@@ -2257,6 +2259,10 @@ class ProxyServer:
         explicit_provider = (body.get("provider") or "").strip().lower()
         explicit_model = (body.get("model") or "").strip()
         max_tokens = klod_ask.clamp_max_tokens(body.get("max_tokens"))
+        try:
+            context_size = int(body.get("context_size") or 0) or None
+        except (TypeError, ValueError):
+            context_size = None
 
         cfg = self._klod_ask_cfg
         if not klod_ask.is_agent_allowed(agent, cfg.get("allowed_agents")):
@@ -2282,8 +2288,8 @@ class ProxyServer:
                 return self._send_simple_and_close(wr, 400, {"error": str(e)})
         else:
             provider, model_id = klod_ask.resolve_model(hint)
-        path, llm_body, llm_headers = klod_ask.build_request_payload(
-            provider, model_id, prompt, max_tokens)
+        path, llm_body, llm_headers = klod_ask.build_request_payload_with_ctx(
+            provider, model_id, prompt, max_tokens, context_size=context_size)
 
         # Anthropic требует Bearer OAuth Боры (как у klod_tg_bot и escalate.py).
         if provider == "anthropic":
@@ -2451,6 +2457,118 @@ class ProxyServer:
             "audio_bytes": len(audio_bytes),
             "elapsed_ms": int(elapsed_ms),
         })
+
+    _klod_models_cache: dict = {}  # class-level cache: {ts, providers}
+
+    async def _raw_api_klod_models(
+        self, rd: asyncio.StreamReader, wr: asyncio.StreamWriter,
+    ) -> None:
+        """GET /api/klod/models — полный сводный каталог LLM с трёх провайдеров + LM Studio.
+        Live-данные (что Google/Anthropic/DeepSeek/LM Studio реально отдают сейчас) + наш
+        реестр KLOD_HINTS/TTS_PRESETS. Кэш 1 час (LLM каталоги обновляются раз в неделю).
+        Без auth — это просто перечень имён, не сами вызовы.
+        """
+        await self._read_headers(rd)
+        now = time.time()
+        cache = type(self)._klod_models_cache
+        ttl = 3600
+        if cache and (now - cache.get("ts", 0)) < ttl:
+            return self._send_simple_and_close(wr, 200, cache["payload"])
+
+        providers: dict[str, list[str]] = {
+            "anthropic": [], "google": [], "deepseek": [], "lm-studio": [],
+        }
+        errors: dict[str, str] = {}
+
+        # Anthropic — через OAuth + наш собственный /proxy/anthropic
+        try:
+            tok = self._load_klod_oauth_token()
+            if tok and self._upstream_session is not None:
+                async with self._upstream_session.get(
+                    "http://127.0.0.1:9090/proxy/anthropic/v1/models",
+                    headers={"Authorization": f"Bearer {tok}",
+                             "anthropic-version": "2023-06-01",
+                             "anthropic-beta": "oauth-2025-04-20"},
+                    timeout=aiohttp.ClientTimeout(total=8),
+                ) as resp:
+                    raw = await resp.read()
+                    if resp.status == 200:
+                        d = json.loads(raw)
+                        providers["anthropic"] = [m.get("id") for m in d.get("data", []) if m.get("id")]
+                    else:
+                        errors["anthropic"] = f"HTTP {resp.status}"
+            else:
+                errors["anthropic"] = "no oauth token"
+        except Exception as e:
+            errors["anthropic"] = str(e)[:120]
+
+        # Google — /proxy/google /v1beta/models (через свой же loopback)
+        try:
+            if self._upstream_session is not None:
+                async with self._upstream_session.get(
+                    "http://127.0.0.1:9090/proxy/google/v1beta/models",
+                    headers={"X-Agent-Name": "klod-access"},
+                    timeout=aiohttp.ClientTimeout(total=8),
+                ) as resp:
+                    raw = await resp.read()
+                    if resp.status == 200:
+                        d = json.loads(raw)
+                        providers["google"] = [m["name"].split("/", 1)[-1]
+                                                for m in d.get("models", []) if m.get("name")]
+                    else:
+                        errors["google"] = f"HTTP {resp.status}"
+        except Exception as e:
+            errors["google"] = str(e)[:120]
+
+        # DeepSeek — /proxy/deepseek /v1/models (Lineman подставит токен)
+        try:
+            if self._upstream_session is not None:
+                async with self._upstream_session.get(
+                    "http://127.0.0.1:9090/proxy/deepseek/v1/models",
+                    headers={"X-Agent-Name": "klod-access"},
+                    timeout=aiohttp.ClientTimeout(total=8),
+                ) as resp:
+                    raw = await resp.read()
+                    if resp.status == 200:
+                        d = json.loads(raw)
+                        providers["deepseek"] = [m.get("id") for m in d.get("data", []) if m.get("id")]
+                    else:
+                        errors["deepseek"] = f"HTTP {resp.status}"
+        except Exception as e:
+            errors["deepseek"] = str(e)[:120]
+
+        # LM Studio — прямой 127.0.0.1:1234 (через SSH-tunnel)
+        try:
+            if self._upstream_session is not None:
+                async with self._upstream_session.get(
+                    "http://127.0.0.1:1234/v1/models",
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    raw = await resp.read()
+                    if resp.status == 200:
+                        d = json.loads(raw)
+                        providers["lm-studio"] = [m.get("id") for m in d.get("data", []) if m.get("id")]
+                    else:
+                        errors["lm-studio"] = f"HTTP {resp.status}"
+        except Exception as e:
+            errors["lm-studio"] = str(e)[:120]
+
+        # Наш реестр хинтов
+        hints = {h: list(t) for h, t in klod_ask.MODEL_PRESETS.items()}
+        tts_hints = {h: list(t) for h, t in klod_ask.TTS_PRESETS.items()}
+
+        payload = {
+            "ts": int(now),
+            "ttl_s": ttl,
+            "providers": providers,
+            "errors": errors,
+            "klod_hints": hints,
+            "tts_hints": tts_hints,
+            "totals": {p: len(v) for p, v in providers.items()},
+        }
+        cache["ts"] = now
+        cache["payload"] = payload
+        self._send_simple_and_close(wr, 200, payload)
 
     async def _klod_tts_invoke(
         self, path: str, body: dict, headers: dict, provider: str,
