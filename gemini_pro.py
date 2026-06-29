@@ -23,6 +23,11 @@ from typing import Any, Callable
 # Что считаем pro-моделью в URL-пути (gemini-*-pro, с возможным суффиксом -preview/-latest).
 _PRO_RE = re.compile(r"gemini-[0-9.]+-pro")
 
+# Специализированные модальности — тарифицируются отдельно от Pro reasoning. Не трогаем гейтом:
+# слепая замена `gemini-2.5-pro` → `base_model` в имени `gemini-2.5-pro-preview-tts` рождает
+# несуществующий `gemini-X-flash-preview-tts` → 404. Гейт защищает только reasoning-Pro.
+_SPECIAL_MODALITY_RE = re.compile(r"-(tts|image|vision|audio|live)\b")
+
 _DEFAULT_BASE = "gemini-3.5-flash"
 _DEFAULT_PRO = "gemini-2.5-pro"
 
@@ -122,6 +127,10 @@ def apply_pro_gate(rest_path: str, agent: str | None, grants: ProGrants,
     Вызывается в reverse_proxy ПОСЛЕ глобального guard 3.1-pro→2.5-pro и ПОСЛЕ определения agent.
     """
     if "gemini-" not in rest_path or not _PRO_RE.search(rest_path):
+        return rest_path
+    # TTS / image / vision / audio / live — это другие модальности, не «Pro reasoning».
+    # Тарификация Google для них своя; гейтить их под reasoning-base бессмысленно (даёт 404).
+    if _SPECIAL_MODALITY_RE.search(rest_path):
         return rest_path
     if grants.is_pro(agent):
         return rest_path

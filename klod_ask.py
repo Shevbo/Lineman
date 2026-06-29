@@ -40,6 +40,21 @@ MODEL_PRESETS: dict[str, tuple[str, str]] = {
     # deepseek-fast = быстрая модель chat. deepseek-reason = reasoning для критика/анализа.
     "deepseek-fast":  ("deepseek",  "deepseek-chat"),
     "deepseek-reason": ("deepseek", "deepseek-reasoner"),
+    # LM Studio — локальные модели на 192.168.1.70:1234 (SSH-туннель smain:127.0.0.1:1234).
+    # Без сети, без квот, без денег. Подходит для batch/parsing/test-фикстур; для frontier
+    # reasoning всё равно cloud. Список синхронизирован с `curl :1234/v1/models` 2026-06-28.
+    "local-fast":     ("lm-studio", "google/gemma-4-e4b"),                  # самая лёгкая
+    "local-normal":   ("lm-studio", "google/gemma-4-12b"),                  # рабочая
+    "local-deep":     ("lm-studio", "google/gemma-4-26b-a4b-it-imatrix"),   # большая gemma
+    "local-reason":   ("lm-studio", "deepseek-r1-distill-qwen-14b"),        # reasoning distill
+    "local-qwen":     ("lm-studio", "qwen/qwen3.5-9b"),                     # альтернативный reasoning
+}
+
+# TTS — отдельный реестр: ответ не текст, а audio bytes. Используется через /api/klod/tts.
+TTS_PRESETS: dict[str, tuple[str, str]] = {
+    "tts-fast":  ("google", "gemini-2.5-flash-preview-tts"),
+    "tts-pro":   ("google", "gemini-2.5-pro-preview-tts"),
+    "tts-3-1":   ("google", "gemini-3.1-flash-tts-preview"),  # самая свежая, экспериментальная
 }
 
 VALID_PROVIDERS = {"anthropic", "google", "deepseek", "lm-studio"}
@@ -185,6 +200,67 @@ def build_request_payload(provider: str, model_id: str, prompt: str,
         headers = {"Content-Type": "application/json", "X-Agent-Name": "klod-access"}
         return path, body, headers
     raise ValueError(f"unknown provider: {provider}")
+
+
+def resolve_tts(hint: Optional[str]) -> tuple[str, str]:
+    """TTS hint → (provider, model_id). Неизвестный hint → tts-pro."""
+    if not hint:
+        return TTS_PRESETS["tts-pro"]
+    return TTS_PRESETS.get(hint.strip().lower(), TTS_PRESETS["tts-pro"])
+
+
+def build_tts_request(provider: str, model_id: str, text: str,
+                      voice: str = "Kore") -> tuple[str, dict, dict]:
+    """Build a TTS generateContent payload for Google. Voice names: Google's prebuilt
+    set (Kore, Puck, Charon, Fenrir, Aoede, Leda, Orus и др.). Returns single-speaker
+    config; multi-speaker — отдельная задача.
+    """
+    if provider != "google":
+        raise ValueError(f"TTS provider not supported: {provider!r}")
+    path = f"/proxy/google/v1beta/models/{model_id}:generateContent"
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": text}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {"voiceName": voice},
+                },
+            },
+        },
+    }
+    headers = {"Content-Type": "application/json", "X-Agent-Name": "klod-access"}
+    return path, body, headers
+
+
+def extract_audio(provider: str, response: dict) -> tuple[bytes, str]:
+    """Pull audio bytes + mime out of a TTS response.
+    Google's generateContent returns base64 audio in candidates[0].content.parts[0].inlineData.
+    Returns (audio_bytes, mime). Empty bytes if not present.
+    """
+    import base64
+    if provider != "google":
+        return b"", ""
+    try:
+        candidates = response.get("candidates") or []
+        if not candidates:
+            return b"", ""
+        parts = candidates[0].get("content", {}).get("parts", [])
+        for p in parts:
+            if not isinstance(p, dict):
+                continue
+            inline = p.get("inlineData") or p.get("inline_data")
+            if not inline:
+                continue
+            mime = inline.get("mimeType") or inline.get("mime_type") or "audio/wav"
+            data = inline.get("data") or ""
+            try:
+                return base64.b64decode(data), mime
+            except Exception:
+                return b"", mime
+    except Exception:
+        pass
+    return b"", ""
 
 
 def extract_text(provider: str, response: dict) -> str:

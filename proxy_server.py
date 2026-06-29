@@ -677,6 +677,8 @@ class ProxyServer:
                 # Ответ Бори на уточняющий вопрос Билдера (status awaiting_user → queued).
                 await self._raw_api_builder_answer(rd, wr)
                 return
+            elif request_path_only == "/api/klod/tts" and method == "POST":
+                await self._raw_api_klod_tts(rd, wr)
             elif request_path_only == "/api/klod/ask" and method == "POST":
                 # Klod-Access LLM Gateway: единый вход для агентов федерации
                 # (политика Бори 2026-06-18). См. klod_ask.py.
@@ -2376,6 +2378,113 @@ class ProxyServer:
         if not text:
             raise RuntimeError(f"empty LLM response: {json.dumps(data)[:200]}")
         return text, elapsed_ms
+
+    async def _raw_api_klod_tts(
+        self, rd: asyncio.StreamReader, wr: asyncio.StreamWriter,
+    ) -> None:
+        """POST /api/klod/tts → {audio_b64, mime, model_used, elapsed_ms}.
+        Body: {"agent":"<id>","text":"<reply>","voice":"Kore","model_hint":"tts-pro","max_tokens":?}.
+        Audio в ответе — base64 (Google отдаёт audio/wav 24kHz). Budget — общий
+        с /api/klod/ask. Голоса: Kore, Puck, Charon, Fenrir, Aoede, Leda, Orus и др.
+        """
+        import base64 as _b64
+        headers = await self._read_headers(rd)
+        clen = int(headers.get("content-length", "0") or "0")
+        raw = await asyncio.wait_for(
+            rd.read(min(clen, 262144)), timeout=15
+        ) if clen > 0 else b""
+        try:
+            body = json.loads(raw) if raw else {}
+            if not isinstance(body, dict):
+                body = {}
+        except Exception:
+            return self._send_simple_and_close(wr, 400, {"error": "bad JSON"})
+
+        agent = str(body.get("agent") or headers.get("x-agent-name") or "").strip()
+        text = str(body.get("text") or body.get("prompt") or "").strip()
+        voice = str(body.get("voice") or "Kore").strip() or "Kore"
+        hint = (body.get("model_hint") or "").strip().lower() or None
+
+        cfg = self._klod_ask_cfg
+        if not klod_ask.is_agent_allowed(agent, cfg.get("allowed_agents")):
+            return self._send_simple_and_close(
+                wr, 403, {"error": f"agent {agent!r} not in allowlist"})
+        if not text:
+            return self._send_simple_and_close(wr, 400, {"error": "need text"})
+        if len(text) > 5000:
+            return self._send_simple_and_close(wr, 400, {"error": "text > 5000 chars"})
+
+        now = time.time()
+        ok, reason = klod_ask.check_budget(
+            agent, self._klod_ask_recent, cfg.get("budget", {}), now)
+        if not ok:
+            return self._send_simple_and_close(wr, 429, {"error": reason})
+
+        provider, model_id = klod_ask.resolve_tts(hint)
+        path, llm_body, llm_headers = klod_ask.build_tts_request(
+            provider, model_id, text, voice=voice)
+
+        try:
+            audio_bytes, mime, elapsed_ms = await self._klod_tts_invoke(
+                path, llm_body, llm_headers, provider)
+        except Exception as e:
+            logger.warning("klod_tts_failed", agent=agent, err=str(e)[:160])
+            return self._send_simple_and_close(
+                wr, 502, {"error": f"tts call failed: {str(e)[:160]}"})
+
+        self._klod_ask_recent.append((now, agent))
+        self._klod_ask_recent = klod_ask.trim_recent(self._klod_ask_recent, now)
+
+        logger.info(
+            "klod_tts", agent=agent, model=model_id, voice=voice,
+            chars=len(text), audio_bytes=len(audio_bytes),
+            elapsed_ms=int(elapsed_ms),
+        )
+        self._send_simple_and_close(wr, 200, {
+            "audio_b64": _b64.b64encode(audio_bytes).decode("ascii"),
+            "mime": mime,
+            "model_used": model_id,
+            "provider": provider,
+            "voice": voice,
+            "agent": agent,
+            "chars": len(text),
+            "audio_bytes": len(audio_bytes),
+            "elapsed_ms": int(elapsed_ms),
+        })
+
+    async def _klod_tts_invoke(
+        self, path: str, body: dict, headers: dict, provider: str,
+    ) -> tuple[bytes, str, float]:
+        """TTS variant of _klod_ask_invoke. Returns (audio_bytes, mime, elapsed_ms)."""
+        if self._upstream_session is None:
+            raise RuntimeError("upstream session not initialized")
+        url = f"http://127.0.0.1:9090{path}"
+        t0 = time.monotonic()
+        clean_headers = {k: v for k, v in headers.items()
+                         if k.lower() != "content-type"}
+        try:
+            async with self._upstream_session.post(
+                url, json=body, headers=clean_headers,
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as resp:
+                raw = await resp.read()
+                elapsed_ms = (time.monotonic() - t0) * 1000.0
+                if resp.status != 200:
+                    raise RuntimeError(
+                        f"upstream HTTP {resp.status}: {raw[:200].decode('utf-8','replace')}")
+                try:
+                    data = json.loads(raw or b"{}")
+                except Exception as e:
+                    raise RuntimeError(
+                        f"upstream non-JSON response: {str(e)} body={raw[:120]!r}")
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"upstream timeout (>60s) on {path}")
+        except aiohttp.ClientError as e:
+            raise RuntimeError(f"upstream client error: {type(e).__name__}: {str(e) or '<empty>'}")
+        audio_bytes, mime = klod_ask.extract_audio(provider, data)
+        if not audio_bytes:
+            raise RuntimeError(f"empty TTS audio: {json.dumps(data)[:200]}")
+        return audio_bytes, mime, elapsed_ms
 
     async def _raw_api_backlog(
         self,

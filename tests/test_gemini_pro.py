@@ -104,6 +104,24 @@ def test_gate_no_grant_downgrades_pro(store):
     assert "2.5-pro" not in out
 
 
+def test_gate_leaves_tts_modality_untouched(store):
+    """TTS-модель тарифицируется отдельно от reasoning-Pro. Гейт её не трогает —
+    иначе слепая замена `gemini-2.5-pro` → base рождает несуществующий
+    `gemini-3.5-flash-preview-tts` → 404 (фактический инцидент 2026-06-28)."""
+    g, _ = store
+    for path in (
+        "/v1beta/models/gemini-2.5-pro-preview-tts:generateContent",
+        "/v1beta/models/gemini-2.5-flash-preview-tts:generateContent",
+        "/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+        "/v1beta/models/gemini-3-pro-image-preview:generateContent",
+        "/v1beta/models/gemini-3-pro-vision-preview:generateContent",
+        "/v1beta/models/gemini-live-2.5-flash-preview:streamGenerateContent",
+        "/v1beta/models/gemini-2.5-pro-preview-audio:generateContent",
+    ):
+        out = apply_pro_gate(path, "titan-without-grant", g, _cfg())
+        assert out == path, f"specialty modality must pass through gate, got: {out}"
+
+
 def test_gate_grant_keeps_pro(store):
     g, _ = store
     g.grant("titan")
