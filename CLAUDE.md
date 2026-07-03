@@ -47,8 +47,21 @@
 - `~/keymaster/api_server.py` (PM2 `keymaster-api`, :9093) — ThreadingHTTPServer + timeout 30s; НЕ возвращать однопоточный HTTPServer (один повисший коннект вешал сервис на 11ч).
 - Журналы для диагностики: `~/logs/klod/sentry.jsonl` (здоровье), `~/logs/klod/dispatch_actions.jsonl` (операции диспетчера), `~/.klod/dispatch_heartbeat`.
 - Рантайм — PM2 (`pm2-shectory.service`), НЕ systemd-юнит lineman.service. `pm2 kill` = ExecStop юнита: массовый даунтайм в pm2.log с «New PM2 Daemon started» — это рестарт всего парка.
-- **openclaw.json строго валидируется**: лишний ключ в accounts роняет openclaw-gateway в крашлуп. Только известные поля.
+- **openclaw.json строго валидируется**: лишний ключ в accounts роняет openclaw-gateway в крашлуп. Только известные поля. Проверка перед рестартом: `node /usr/lib/node_modules/openclaw/dist/index.js config validate`.
+- **Tank ликвидирован 2026-07-03** (агент main удалён из openclaw agents.list, TG-поллеры default/keymaster выключены). НЕ использовать `openclaw agents delete` для агентов с workspace=/home/shectory — он prune'ит workspace.
 - Отладка Lineman: `LINEMAN_DEBUG=1` (в проде логи INFO, asyncio debug выключен).
+
+## Квота Gemini и /api/klod/ask
+
+- Мониторинг сам ходит в Gemini: per-service `interval` из config.json соблюдается циклом (gemini 300с), deep-probe (реальный generateContent) не чаще 1/час (`global.gemini_deep_probe_min_gap_s`). НЕ возвращать 60с/частые пробы — 288 генераций/сутки съедали всю квоту ключа (инцидент 01-02.07).
+- `/api/klod/ask`: после 429 от Google включается cooldown (`klod_ask.google_429_cooldown_s`, деф. 600с) — все gemini-запросы получают мгновенный 429 + retry_after без похода в Google.
+- Pro-гейт: запрос pro-модели без гранта подменяется базой (3.5-flash) — пары «2.5-flash + 3.5-flash» в request_log это одна логическая попытка.
+
+## Грабли диагностики request_log
+
+- `timestamp` хранится ISO с 'T' и таймзоной; `datetime('now')` даёт строку с пробелом. Строковое сравнение с суб-дневным окном («-8 minute») ложно-истинно для всех 'T'-строк дня — для окон внутри дня сравнивай со строкой формата `"2026-07-03T09:31"`.
+- «UA aiohttp + X-Agent-Name: klod-access + host 127.0.0.1:9090» = loopback самого Lineman (_klod_ask_invoke). Реального виновника ищи в `~/logs/klod-ask.jsonl` (audit_log по агентам).
+- История операций Клода: `~/logs/klod/dispatch_actions.jsonl`, здоровье: `~/logs/klod/sentry.jsonl`.
 
 ## Дисциплина памяти (обязательно)
 
