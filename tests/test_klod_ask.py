@@ -249,3 +249,11 @@ def test_audit_log_writes_jsonl(tmp_path):
     assert len(lines) == 2
     r0 = json.loads(lines[0])
     assert r0["agent"] == "career-bot"
+
+
+def test_is_quota_error():
+    from klod_ask import is_quota_error
+    assert is_quota_error('upstream HTTP 429: {"error": ...}')
+    assert is_quota_error("code=RESOURCE_EXHAUSTED")
+    assert not is_quota_error("upstream HTTP 500: boom")
+    assert not is_quota_error("")

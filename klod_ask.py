@@ -147,6 +147,14 @@ def clamp_max_tokens(requested: Optional[int]) -> int:
     return min(n, HARD_MAX_TOKENS)
 
 
+def is_quota_error(err: str) -> bool:
+    """Исчерпание квоты провайдера (429/RESOURCE_EXHAUSTED) в тексте ошибки
+    _klod_ask_invoke. По нему включается provider-cooldown, чтобы ретраи
+    потребителей не били по исчерпанному ключу (шторм 2026-07-03)."""
+    e = err or ""
+    return "HTTP 429" in e or "RESOURCE_EXHAUSTED" in e
+
+
 def audit_log(record: dict, path: Optional[pathlib.Path] = None) -> None:
     """JSONL-аудит. Каждая строка = один запрос. Без секретов в логе."""
     p = path or KLOD_ASK_LOG

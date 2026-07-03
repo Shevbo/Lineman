@@ -37,6 +37,7 @@ from dedup_cache import DedupCache
 from tg_miniapp import validate_init_data, user_id_allowed
 from backlog import BacklogStore, enqueue_builder_ticket
 from federation_registry import load_registry, resolve as resolve_repo
+from federation_inbox import deliver_to_local_agent
 
 logger = structlog.get_logger(__name__)
 
@@ -323,6 +324,11 @@ class ProxyServer:
         self._klod_ask_cfg: dict[str, Any] = self._config.get("klod_ask", {}) or {}
         # In-memory счётчик (ts, agent) — окно 24ч, trim каждый запрос.
         self._klod_ask_recent: list[tuple[float, str]] = []
+        # Cooldown Google после 429: шторм 2026-07-03 — потребители klod/ask
+        # ретраили лестницу gemini-хинтов 43 минуты, каждый ретрай бил по
+        # исчерпанной квоте (и по RPM). При активном cooldown отвечаем 429
+        # с retry_after сразу, в Google не ходим.
+        self._klod_ask_google_block_until: float = 0.0
 
         # LLM concurrency queue — prevents cascade overloads under heavy load
         llm_q = proxy_cfg.get("llm_queue", {})
@@ -974,42 +980,34 @@ class ProxyServer:
                     agent_meta = {"id": target_agent_id, "node": _node_key}
                     break
 
-        if not agent_meta:
-            self._send_json_error(wr, 404, f"Agent '{target_agent_id}' not found in federation.")
-            await wr.drain()
-            wr.close()
-            return
-
-        node = agent_meta.get("node", "smain")
+        # Catch-all: даже если агента нет в node_map и нет в REMOTE_SSH_CONFIG,
+        # пишем в файловый inbox `~/.federation-inbox/<id>/inbox.jsonl`. Любой
+        # агент знает где забрать свои сообщения; никаких 404 для незнакомых ID.
+        # Это убирает разрыв в доставке для career-bot/garden/codex и любых
+        # будущих агентов до их регистрации в config.json.
+        in_node_map = agent_meta is not None
+        node = (agent_meta or {}).get("node", "smain") if agent_meta else "smain"
         response_data: dict[str, Any] = {"status": "error", "message": "Failed to communicate with agent."}
         status_code = 500
 
-        if node == "smain": # Local agent on smain
+        if node == "smain": # Local agent on smain — пишем в файловый inbox
+            # Раньше здесь был subprocess `openclaw agent --agent <id> ...`,
+            # но openclaw CLI снесён после ликвидации Tank (2026-06-16), и все
+            # 13 агентов node_map валились HTTP 500. Сейчас — единый файловый
+            # путь через federation_inbox.deliver_to_local_agent (см. инцидент
+            # 2026-06-29 в .claude/memory/04_incidents.md).
             try:
-                cmd = ["openclaw", "agent", "--agent", target_agent_id, "--message", message_text, "--json"]
-                logger.debug("local_agent_call", cmd=" ".join(cmd))
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                result = deliver_to_local_agent(
+                    target_agent_id, from_agent_id, message_text, in_node_map=in_node_map
                 )
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout.total)
-                
-                if proc.returncode == 0:
-                    try:
-                        response_data = json.loads(stdout.decode("utf-8", errors="ignore"))
-                        status_code = 200
-                    except json.JSONDecodeError:
-                        response_data = {"status": "error", "message": "Invalid JSON response from agent.", "stdout": stdout.decode(), "stderr": stderr.decode()}
-                        status_code = 500
+                if result.get("status") == "ok":
+                    response_data = result
+                    status_code = 200
                 else:
-                    response_data = {"status": "error", "message": f"Agent command failed (code {proc.returncode}).", "stdout": stdout.decode(), "stderr": stderr.decode()}
+                    response_data = result
                     status_code = 500
-            except asyncio.TimeoutError:
-                response_data = {"status": "timeout", "message": f"Agent '{target_agent_id}' did not respond in time."}
-                status_code = 504
             except Exception as e:
-                response_data = {"status": "error", "message": f"Local agent communication error: {e}"}
+                response_data = {"status": "error", "message": f"Local agent file delivery error: {e}"}
                 status_code = 500
         else: # Remote agent
             # Use SSH for remote agents, if configured
@@ -2288,6 +2286,18 @@ class ProxyServer:
                 return self._send_simple_and_close(wr, 400, {"error": str(e)})
         else:
             provider, model_id = klod_ask.resolve_model(hint)
+
+        if provider == "google" and now < self._klod_ask_google_block_until:
+            retry_after = int(self._klod_ask_google_block_until - now) + 1
+            klod_ask.audit_log({
+                "ts": now, "agent": agent, "model": model_id, "ok": False,
+                "blocked_by": "google_cooldown", "retry_after": retry_after,
+            })
+            return self._send_simple_and_close(wr, 429, {
+                "error": "google quota cooldown — квота Gemini исчерпана, "
+                         "возьми другой model_hint (deepseek/local) или подожди",
+                "retry_after": retry_after,
+            })
         path, llm_body, llm_headers = klod_ask.build_request_payload_with_ctx(
             provider, model_id, prompt, max_tokens, context_size=context_size)
 
@@ -2304,13 +2314,22 @@ class ProxyServer:
             text, elapsed_ms = await self._klod_ask_invoke(
                 path, llm_body, llm_headers, provider)
         except Exception as e:
-            logger.warning("klod_ask_llm_failed", agent=agent, err=str(e)[:160])
+            err = str(e)
+            logger.warning("klod_ask_llm_failed", agent=agent, err=err[:160])
             klod_ask.audit_log({
                 "ts": now, "agent": agent, "model": model_id, "ok": False,
-                "error": str(e)[:200],
+                "error": err[:200],
             })
+            if provider == "google" and klod_ask.is_quota_error(err):
+                cooldown = float(cfg.get("google_429_cooldown_s", 600))
+                self._klod_ask_google_block_until = now + cooldown
+                logger.warning("klod_ask_google_cooldown", seconds=int(cooldown))
+                return self._send_simple_and_close(wr, 429, {
+                    "error": "gemini quota exhausted",
+                    "retry_after": int(cooldown),
+                })
             return self._send_simple_and_close(
-                wr, 502, {"error": f"llm call failed: {str(e)[:160]}"})
+                wr, 502, {"error": f"llm call failed: {err[:160]}"})
 
         # Запись бюджета только при успехе — failed-вызовы не съедают квоту.
         self._klod_ask_recent.append((now, agent))
