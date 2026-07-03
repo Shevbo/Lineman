@@ -31,12 +31,21 @@ def run():
 
     con.commit()
 
-    size_before = os.path.getsize(DB)
-    log.info(f'Running VACUUM (size before: {size_before/1024/1024:.1f} MB)...')
-    con.execute('VACUUM')
+    # VACUUM блокирует БД на минуты (2026-06-26: 7м38с) — на это окно встаёт весь
+    # Lineman и klod-dispatch сыпет tick error. Гоняем его только когда есть что
+    # возвращать ОС: свободных страниц больше 20% файла. Иначе ежедневный VACUUM
+    # стабильно экономил 0.0 MB (лог за июнь-июль) при полной блокировке.
+    freelist = con.execute('PRAGMA freelist_count').fetchone()[0]
+    pages = con.execute('PRAGMA page_count').fetchone()[0]
+    if pages and freelist / pages > 0.2:
+        size_before = os.path.getsize(DB)
+        log.info(f'Running VACUUM (free {freelist}/{pages} pages, size {size_before/1024/1024:.1f} MB)...')
+        con.execute('VACUUM')
+        size_after = os.path.getsize(DB)
+        log.info(f'Done. Size after: {size_after/1024/1024:.1f} MB (saved {(size_before-size_after)/1024/1024:.1f} MB)')
+    else:
+        log.info(f'VACUUM skipped: free pages {freelist}/{pages} ниже порога 20%')
     con.close()
-    size_after = os.path.getsize(DB)
-    log.info(f'Done. Size after: {size_after/1024/1024:.1f} MB (saved {(size_before-size_after)/1024/1024:.1f} MB)')
 
 if __name__ == '__main__':
     run()

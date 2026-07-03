@@ -520,9 +520,12 @@ async def main_entry(config: dict[str, Any]) -> None:
 
 def main() -> None:
     """CLI entry point."""
+    # DEBUG + asyncio debug в проде давали 3MB/сутки шума в stderr (каждый
+    # connect/EOF транспорта) и замедляли event loop. Для отладки: LINEMAN_DEBUG=1.
+    debug_mode = os.environ.get("LINEMAN_DEBUG") == "1"
     logging.basicConfig(
         stream=sys.stderr,
-        level=logging.DEBUG,
+        level=logging.DEBUG if debug_mode else logging.INFO,
         format="%(message)s",
     )
     structlog.configure(
@@ -544,7 +547,7 @@ def main() -> None:
     logger.info("lineman_booting")
     config = load_config()
     try:
-        asyncio.run(main_entry(config), debug=True)
+        asyncio.run(main_entry(config), debug=debug_mode)
     except KeyboardInterrupt:
         logger.info("lineman_shutdown", reason="keyboard_interrupt")
     except Exception:

@@ -119,7 +119,22 @@ PROMPTS: dict[str, str] = {
 }
 
 
+def _ollama_alive() -> bool:
+    """Sweep-задачи ходят только в ollama-hoster. Он с 2026-06-07 на ручном
+    запуске (OOM-инцидент) и неделями лежит — без этой проверки каждый прогон
+    крона плодил задачи, которые гарантированно умирали 502 (591 err/сутки)."""
+    try:
+        req = urllib.request.Request("http://10.66.0.7:11434/api/tags")
+        with _NOPROXY.open(req, timeout=3) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
 def main() -> int:
+    if not _ollama_alive():
+        print("[sweep] ollama-hoster недоступен — skip (задачи бы умерли 502)")
+        return 0
     if _lazy_busy():
         print("[sweep] queue has user-priority jobs — skip")
         return 0
