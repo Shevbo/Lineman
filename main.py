@@ -313,9 +313,28 @@ async def monitoring_loop(
                 },
             )
 
+            # Per-service interval из config теперь честно соблюдается: цикл
+            # идёт каждые 60с, но сервис проверяется не чаще своего interval.
+            # До 2026-07-03 gemini-чеки шли каждый цикл = 2880 GET/сутки.
+            now_ts = time.time()
+            svc_interval = svc.get("interval", 0)
+            if svc_interval and now_ts - state_svc.get("last_check_ts", 0) < svc_interval:
+                continue
+            state_svc["last_check_ts"] = now_ts
+
             need_deep_probe = force_deep_probe or (
                 state_svc.get("consecutive_failures", 0) > 0
             )
+            if svc["type"] == "gemini" and need_deep_probe:
+                # Инцидент 2026-07-01..02: deep-probe (реальный generateContent)
+                # каждые 5-10 мин сам выжигал суточную квоту ключа, degraded-статус
+                # учащал пробы — самоусиливающаяся петля до 100% 429. Пингуем
+                # генерацией не чаще раза в час, независимо от статуса.
+                gap = global_cfg.get("gemini_deep_probe_min_gap_s", 3600)
+                if now_ts - state_svc.get("last_deep_probe_ts", 0) < gap:
+                    need_deep_probe = False
+                else:
+                    state_svc["last_deep_probe_ts"] = now_ts
 
             result = await run_check(
                 svc, state_svc, global_cfg, need_deep_probe, metrics
