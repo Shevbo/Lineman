@@ -282,3 +282,38 @@ Smoke после restart `lineman-gateway`: `/api/log` loopback=200/public=403, 
 **Новый контур:** scripts/klod_sentry.py (cron */5) — проба портов по факту, JSONL-история ~/logs/klod/sentry.jsonl, авторестарт keymaster-api/klod-dispatch (cooldown 30м, max 3/сутки), TG только на смену состояния. Журнал операций диспетчера: ~/logs/klod/dispatch_actions.jsonl, heartbeat ~/.klod/dispatch_heartbeat.
 
 **Открыто у Бори:** дубль-поллинг @ShectoryKlodBot (openclaw default vs klod-tg-bot), Gemini 429 квота (842/сутки), pre-approve SHECTORY_AUTH_BRIDGE_SECRET для career-bot.
+
+### 2026-07-03 (дополнение) Gemini-квоту выжигал собственный мониторинг + Tank-петля 2MB
+
+**Симптом:** 842×429/сутки на Gemini, degraded с 01.07.
+**Root cause:**
+1. monitoring_loop игнорировал per-service interval из config — gemini-чеки шли каждые 60с (2880 GET/сутки), deep-probe (реальный generateContent «ping») каждые 5-10 мин = ~288 генераций/сутки ≈ вся суточная квота ключа. Degraded учащал пробы — самоусиление до 100% 429.
+2. Tank (openclaw agent main, legacy): сессия распухла до 381K токенов; каждые 30 мин (:09/:39) триггер слал 2MB тела → Censor-гейт резал deepseek → фолбэк лил 2MB в Gemini → 429. Крутилось с 23.06 (459 вызовов). Разорвано рестартом gateway 12:08 (лента перекатилась в свежую сессию); ПОЛНАЯ ликвидация Tank — ждёт отдельного решения Бори.
+
+**Fix:** commit 6d72a28 — interval честно соблюдается (gemini 300с), gemini deep-probe ≥1ч (gemini_deep_probe_min_gap_s). Проверено вживую: LIST раз в 300с.
+
+**Грабли для запросов к request_log:** timestamp хранится ISO с 'T' и таймзоной, а datetime('now') даёт 'YYYY-MM-DD HH:MM:SS' с пробелом — строковое сравнение с суб-дневными окнами ("-8 minute") ЛОЖНО истинно для всех 'T'-строк того же дня. Для окон внутри дня сравнивай через строку с 'T' или datetime(timestamp).
+
+### 2026-07-03 Ликвидация Tank (openclaw agent main)
+
+По команде Бори. Tank = legacy главный агент openclaw (заменён klod-tg-bot). Его heartbeat (:09/:39, файл ~/HEARTBEAT.md) с сессией 381K токенов лил 2MB в Gemini с 23.06.
+Сделано: удалён из agents.list (бэкап openclaw.json.bak-tank-liquidation-*), ~/HEARTBEAT.md → HEARTBEAT.md.tank-liquidated-20260703, telegram default+keymaster ингрессы отключены ранее. `openclaw config validate` OK, hot reload OK, 13 агентов живы.
+НЕ делал: `openclaw agents delete main` — он «prunes workspace», а workspace Tank = /home/shectory (риск снести HOME). Файлы сессий ~/.openclaw/agents/main/ (~300MB) оставлены как архив — можно сжать при нехватке диска.
+Lineman node_map «main» не тронут: очередь /api/agent/main/message живёт в Lineman независимо от openclaw.
+
+### 2026-07-03 (шторм 12:55-13:38) ретраи потребителей klod/ask по мёртвой квоте
+
+**Симптом:** 43 мин парных 429 (2.5-flash+3.5-flash, тела 32-67KB) от source_agent=klod-access, UA aiohttp.
+**Root cause:** UA aiohttp = сам Lineman (_klod_ask_invoke, loopback self-call с X-Agent-Name klod-access). Потребители /api/klod/ask (career-bot и др.) при 502 ретраили лестницу gemini-хинтов; каждая попытка реально ходила в Google по исчерпанной квоте.
+**Fix:** commit 1fdf0de — google-cooldown в /api/klod/ask: после 429/RESOURCE_EXHAUSTED все google-запросы получают мгновенный 429 + retry_after (google_429_cooldown_s, деф. 600с). Проверено вживую: 2-й вызов 12мс без Google. Тем же коммитом узаконена файловая доставка inbox из прошлой сессии (была в проде без коммита).
+**Диагностический ключ:** «UA aiohttp + X-Agent-Name: klod-access + host 127.0.0.1:9090» в request_log = loopback klod/ask, реальный виновник — caller из ~/logs/klod-ask.jsonl (audit_log).
+
+### 2026-07-03 hoster замёрз (OOM-трэшинг без kill), ребут руками в 20:51
+
+**Симптом:** hoster (5.8GB RAM) завис ~20:29; журнал: с 19:47 «Under memory pressure», в 20:29 обрыв посреди OOM-таблицы («Missed 3609 kernel messages»), ни одного «Out of memory: Killed» — ядро не успело, хост умер в трэшинге.
+**Root cause:** форк-шторм ежеминутных кронов без flock/timeout: в таблице 72 venv-python + 20 cron + 7 sh накопившихся процессов (heartbeat, ourdiary reminders, eschool healthcheck плодились, пока старые висели). База и так впритык: 4× next-server, pgadmin, postgres, trader, deploy-worker на 5.8GB. Триггер давления не установлен (журнал потерян) — иммунитет закрывает класс целиком.
+**Иммунитет (поставлено):**
+1. earlyoom (systemd, enable): SIGTERM при mem<8% и swap<25%, prefer next-server/node/python/gunicorn/uvicorn/ollama, avoid sshd/systemd/journald/cron. Конфиг /etc/default/earlyoom.
+2. ВСЕ кроны hoster обёрнуты `flock -n + timeout` (heartbeat 50с, healthcheck 240с, reminders 50с, warm_bars 3000с, бэкапы 3600с) — пайлап процессов невозможен.
+3. ~/scripts/memguard.sh (cron */5): MemAvailable<400MB → снимок топ-процессов в ~/.memguard/ + TG-алерт через Lineman (дедуп 6ч).
+**Грабли:** `cmd | python3 - <<EOF | crontab -` — heredoc ЗАМЕЩАЕТ stdin пайпа, python получил пустой stdin и кронтаб был затёрт до 1 строки. Восстановлен из бэкапа (~/crontab.bak-memguard-*), правка через файл /tmp/fix_cron.py. Перед правкой чужого кронтаба — ВСЕГДА `crontab -l > bak`.

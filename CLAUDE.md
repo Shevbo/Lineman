@@ -38,6 +38,7 @@
 | `cloudflare-worker/` | claude-connect / gemini-proxy для обхода геоблока | подтвердить у Бориса |
 | `lineman_retention.py` | cron 03:00: чистка request_log; VACUUM только при freelist>20% (иначе блокирует БД на минуты — инцидент 2026-07-03) | нет |
 | `scripts/klod_sentry.py` | Дозор (cron */5): пробы 9090/9093/heartbeat, JSONL-история, авторестарт keymaster-api и klod-dispatch | нет |
+| `scripts/klod_rollcall.py` | Перекличка (cron 08:30): ядро+PM2+systemd+отвеченность inbox+агенты 24ч+hoster; чинит замерших, TG-сводка Боре | нет |
 | `scripts/lazy_worker.py` + `lazy_queue.py` | Lazy Queue: локальные LLM-задачи (PM2 lazy-worker) | нет |
 | `scripts/federation_sweep.py` | cron: фоновые sweep-задачи; шлёт ТОЛЬКО если ollama-hoster жив | нет |
 
@@ -61,7 +62,14 @@
 
 - `timestamp` хранится ISO с 'T' и таймзоной; `datetime('now')` даёт строку с пробелом. Строковое сравнение с суб-дневным окном («-8 minute») ложно-истинно для всех 'T'-строк дня — для окон внутри дня сравнивай со строкой формата `"2026-07-03T09:31"`.
 - «UA aiohttp + X-Agent-Name: klod-access + host 127.0.0.1:9090» = loopback самого Lineman (_klod_ask_invoke). Реального виновника ищи в `~/logs/klod-ask.jsonl` (audit_log по агентам).
-- История операций Клода: `~/logs/klod/dispatch_actions.jsonl`, здоровье: `~/logs/klod/sentry.jsonl`.
+- История операций Клода: `~/logs/klod/dispatch_actions.jsonl`, здоровье: `~/logs/klod/sentry.jsonl`, переклички: `~/logs/klod/rollcall.jsonl`.
+
+## hoster (10.66.0.7) — иммунитет к OOM (2026-07-03, два инцидента)
+
+- 5.8GB RAM, запаса нет (4 Next + pgadmin + postgres + trader). Замерзал в OOM-трэшинге БЕЗ kill (форк-шторм кронов).
+- Защита: earlyoom (`/etc/default/earlyoom`, mem<8%/swap<25%, avoid sshd/systemd/cron), ВСЕ кроны под `flock -n + timeout`, `~/scripts/memguard.sh` (*/5: <400MB → снимок ps + TG).
+- **Новый крон на hoster — только с `flock -n /tmp/<name>.lock timeout <s>`.**
+- **НИКОГДА**: `cmd | python3 - <<EOF | crontab -` — heredoc замещает stdin пайпа, кронтаб затирается. Перед правкой: `crontab -l > bak`, правка через файл.
 
 ## Дисциплина памяти (обязательно)
 

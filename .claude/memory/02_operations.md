@@ -114,3 +114,7 @@ sudo systemctl reload nginx      # перезагрузка
 | Дашборд белая страница | nginx, basic auth, /api/* endpoints |
 | Растёт BD/WAL | `lineman_retention.py` не отработал — запустить руками + `wal_checkpoint(TRUNCATE)` |
 | Дублирующиеся LLM-запросы | `dedup_cache.py` — окно, ключ хэширования |
+
+## Утренняя перекличка (2026-07-03)
+
+`scripts/klod_rollcall.py` — cron 08:30, дополняет klod_sentry (*/5). Проверяет ядро Клода, PM2, systemd-юниты, отвеченность inbox klod-access, активность агентов за 24ч, hoster. Замерших чинит рестартом (диспетчер — только если не пытается отвечать по dispatch_actions.jsonl). Сводка Боре в TG, история: ~/logs/klod/rollcall.jsonl.
