@@ -36,6 +36,19 @@
 | `checks/` | health probes (gemini, deepseek, telegram, google_services) | нет |
 | `tests/` | pytest | свободно |
 | `cloudflare-worker/` | claude-connect / gemini-proxy для обхода геоблока | подтвердить у Бориса |
+| `lineman_retention.py` | cron 03:00: чистка request_log; VACUUM только при freelist>20% (иначе блокирует БД на минуты — инцидент 2026-07-03) | нет |
+| `scripts/klod_sentry.py` | Дозор (cron */5): пробы 9090/9093/heartbeat, JSONL-история, авторестарт keymaster-api и klod-dispatch | нет |
+| `scripts/lazy_worker.py` + `lazy_queue.py` | Lazy Queue: локальные LLM-задачи (PM2 lazy-worker) | нет |
+| `scripts/federation_sweep.py` | cron: фоновые sweep-задачи; шлёт ТОЛЬКО если ollama-hoster жив | нет |
+
+## Экосистема Клод-Доступа (смежные сервисы, тоже твои)
+
+- `~/workspaces/klod-foreman/klod_dispatch.py` (systemd user `klod-dispatch`) — отвечает агентам на `/api/agent/klod-access/inbox`. done в seen ставится ТОЛЬКО после доставки ответа (иначе 429 навсегда хоронит жалобу — баг «Клод молчит», починен 2026-07-03). Модель gemini-2.5-pro + фолбэк flash.
+- `~/keymaster/api_server.py` (PM2 `keymaster-api`, :9093) — ThreadingHTTPServer + timeout 30s; НЕ возвращать однопоточный HTTPServer (один повисший коннект вешал сервис на 11ч).
+- Журналы для диагностики: `~/logs/klod/sentry.jsonl` (здоровье), `~/logs/klod/dispatch_actions.jsonl` (операции диспетчера), `~/.klod/dispatch_heartbeat`.
+- Рантайм — PM2 (`pm2-shectory.service`), НЕ systemd-юнит lineman.service. `pm2 kill` = ExecStop юнита: массовый даунтайм в pm2.log с «New PM2 Daemon started» — это рестарт всего парка.
+- **openclaw.json строго валидируется**: лишний ключ в accounts роняет openclaw-gateway в крашлуп. Только известные поля.
+- Отладка Lineman: `LINEMAN_DEBUG=1` (в проде логи INFO, asyncio debug выключен).
 
 ## Дисциплина памяти (обязательно)
 
@@ -149,3 +162,13 @@ Lineman читает секреты из:
 - `lineman-reviewer` — code-review с фокусом "не сломать федерацию"
 
 Используй их через Agent-tool. Не делегируй критичные правки — реви читай сам и решай сам.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

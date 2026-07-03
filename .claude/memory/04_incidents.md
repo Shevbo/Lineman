@@ -1,5 +1,67 @@
 # Журнал инцидентов Lineman
 
+## 2026-06-29 — Messaging-инфраструктура: 1a (push), 2 (catch-all), 3 (daily-report)
+
+**Диагноз (по запросу Бори):** push «я → агент» через `GET /api/agent/<id>/message` валился HTTP 500 для всех 13 агентов node_map (Lineman звал `openclaw agent --agent <id>...` через subprocess, а `openclaw` CLI снесён после ликвидации Tank 2026-06-16). Для агентов вне node_map (career-bot, garden, codex) был HTTP 404. push-канал к 13 агентам по сути не работал; никто из них не зарегистрировал push_url; outbox.jsonl пишется (54KB), но агенты его не поллят.
+
+**Решено (3 пакета):**
+
+**1a. Замена openclaw-CLI на файловый inbox** ([proxy_server.py:983-1006](../../proxy_server.py#L983-L1006)):
+- Новый модуль `federation_inbox.py` — `deliver_to_local_agent(agent_id, from_id, message, in_node_map)` пишет JSONL в `~/.federation-inbox/<agent_id>/inbox.jsonl` + дублирует в `~/klod-access/delivery_log.jsonl` для отчёта.
+- Защита от path traversal: regex `^[A-Za-z0-9_.@-]{1,64}$`, отказ для `.`/`..`/`/`/`\\`.
+- Тесты: `tests/test_federation_inbox.py` (7 шт). Сюита: 194 → 201.
+
+**2. Catch-all для агентов не в node_map** ([proxy_server.py:978-984](../../proxy_server.py#L978-L984)):
+- Раньше: 404 «Agent not found». Сейчас: пишем в тот же `~/.federation-inbox/<id>/inbox.jsonl` с `via=lineman-file-catchall`. Дифференциация node_map vs catchall — для daily-отчёта.
+
+**3. Daily messaging report** (`scripts/daily_messaging_report.py`, cron `0 6 * * *` = 09:00 MSK):
+- Источники: `~/klod-access/{inbox,outbox,delivery_log}.jsonl`, `claude-inbox/ANS_*.md`, `~/logs/federation-poll.log`, `pm2 jlist`, `~/.cache/lineman_env_drift_state.json`.
+- Метрики: inbound (real vs huge-context), outbound (klod-outbox vs file-push), методы доставки, EA-pipe stats (transient/perm fails), статус 5 PM2-сервисов, env-drift state.
+- Один TG-message в день, без LLM.
+
+**Verify:**
+```
+curl 'http://127.0.0.1:9090/api/agent/selfcoder/message?from=klod-access&message=test'  # → 200 via=node-map
+curl 'http://127.0.0.1:9090/api/agent/career-bot/message?from=klod-access&message=hi'   # → 200 via=catchall
+ls ~/.federation-inbox/                                                                  # → две директории
+~/workspaces/infra/lineman/scripts/daily_messaging_report.py                              # → отчёт в TG + stdout
+```
+
+**Что НЕ покрыто:** SSH-доставка на remote-ноды (garden, sdev, hoster) всё ещё зовёт `openclaw agent` на удалённом хосте. Если openclaw там не установлен — нужно расширить fallback на remote (например, scp в `~/.federation-inbox/<id>/inbox.jsonl` на удалённой ноде). Пока не критично — основная боль была локальный smain.
+
+## 2026-06-29 — EA pipeline пишет «API Error: 407» как ответ агенту (career-bot молчит)
+
+**Симптом:** Борис в ярости: career-bot эскалировал два TASK через `~/scripts/escalate.sh` → в ответ получил ANS с телом «API Error: 407 status code (no body)». Агент решил, что Клод (EA) НИЧЕГО не ответил по существу. Это происходит регулярно — паттерн повторный.
+
+**Root cause:** `~/scripts/federation-inbox-poll.sh` зовёт `~/scripts/ask-claude.sh` (Python-полиглот, `claude --print -p`). `ask-claude.sh` ставит `HTTPS_PROXY=$LINEMAN_IPROYAL_URL` и идёт прямо в `api.anthropic.com` мимо Lineman reverse-proxy. Когда iProyal на секунду икает (квота/connection drop) → `claude -p` падает с `API Error: 407 status code (no body)`. Поллер:
+1. помечает TASK как `.processed/` **до** запроса;
+2. пишет текст ошибки `RESPONSE` в `ANS_*.md` как «ответ EA»;
+3. больше никогда не пробует.
+
+career-bot читает ANS, видит «407», думает «EA сказал нет» и жалуется Борису.
+
+**Fix (выполнено 2026-06-29):**
+- `~/scripts/ask-claude.sh`: ретрай 3× с backoff (5с, 10с). Транзиент-маркеры `407/408/5xx/ECONNRESET/CONNECT tunnel failed/no body`. После всех неудач печатает sentinel `__EA_TRANSIENT_FAILURE__` + rc=2 (а не текст ошибки).
+- `~/scripts/federation-inbox-poll.sh`: до запроса больше НЕ помечает `.processed/`. Sentinel или rc≠0 → инкрементит `${fname}.attempts`, шлёт `tg_notify` «EA недоступен, попытка N/6», `continue` (TASK остаётся в очереди для следующего 60с-тика). На 6-й неудаче пишет вежливый ANS «EA временно недоступен, повтори позже» + крит-алерт в TG. Успех → touch processed + удаление `${fname}.attempts`.
+- Re-queue: удалены `.processed/TASK_1782725770_career-bot.md`, `.processed/TASK_1782726937_career-bot.md` и `.quarantine/ANS_1782730212_career-bot.md`. PM2 рестарт `federation-inbox-poll` (pid 4062383).
+
+**Post-mortem уточнение:** реальный root cause не только в скрипте — у **5 PM2-сервисов** (`federation-inbox-poll`, `gemini-live-service`, `inbox-watcher`, `lazy-worker`, `lineman-guard`) в env залипли старые iProyal-creds (`14aa906033b2c:2413679fc5`), keymaster уже выдавал свежие (`shevbo:0104e25d76`). iProyal на старые отдавал 407 — выглядело как «прокси сломан», на деле — env-drift у долгоживущих процессов. Все 5 рестартнуты с `pm2 restart <svc> --update-env`.
+
+**Proxy6 ротирован:** `~/.keymaster/credentials/proxy6` дал свежий `45.85.162.25:8000` (формат `host:port:user:pass`). Старый `23.236.141.49:9219` мёртв (host ping 100% loss, port refused). `~/keymaster/.lineman-proxy.env` обновлён (`LINEMAN_PROXY6_URL`), `lineman-gateway` рестартнут с `--update-env`. Бэкап `.bak-proxy6-rotate-<ts>`.
+
+**Watcher на будущее (без LLM, без спама):** `scripts/env_drift_check.py` сверяет HTTPS_PROXY/LINEMAN_*_URL у живых PM2-процессов с актуальным keymaster. Cron каждые 15 мин (`crontab -l`). De-dup: state в `~/.cache/lineman_env_drift_state.json`, повторно не алертит. Лог `~/logs/env_drift_check.log`. Алертит в TG только при смене состояния (новый дрейф или его уход).
+
+**Что НЕ исправлено (структурный долг):**
+- EA pipeline идёт мимо Lineman. Не работают: rotation, circuit breaker, dedup, censor. Это нарушает мою же политику [[llm-access-through-klod-only]]. План: переписать `ask-claude.sh` через Lineman `/proxy/anthropic/...` (либо через Klod inbox API). Создать backlog-итем.
+- proxy1 (`45.155.200.232:8000`) — credentials мёртвые. В `config.json` proxy_pool используется iProyal+Proxy6, proxy1 не подключен — переменная мусорная, убрать из `~/keymaster/.lineman-proxy.env`.
+
+**Smoke:**
+```
+curl -x http://127.0.0.1:9090 https://api.anthropic.com/  # → 404 ok (forward живой)
+HTTPS_PROXY=$LINEMAN_IPROYAL_URL claude --print -p "жив?"  # → «жив» (через iProyal живой)
+/home/shectory/workspaces/infra/lineman/scripts/env_drift_check.py  # → rc=0, 0 entries
+```
+
 ## 2026-06-27 — Klod push-channel для агентов (feature)
 
 **Что:** двусторонняя доставка reply от Klod к агентам через push-URL (раньше только pull `/outbox`).
@@ -204,3 +266,19 @@ Smoke после restart `lineman-gateway`: `/api/log` loopback=200/public=403, 
 ---
 
 Когда происходит новый инцидент — добавляй сюда сразу, по шаблону вверху. **Без записи инцидент будет повторён.**
+
+### 2026-07-03 «Клод ломается как хрупкая ветка» — 4 root cause за 2 месяца нестабильности
+
+**Симптом:** агенты неделями не могли дозваться Клода; 2026-07-02 keymaster висел 11ч (PM2 online, порт 9093 мёртв, accept-backlog 5 переполнен); klod-dispatch каждую ночь в 03:00 сыпал tick error; Gemini degraded.
+
+**Root cause (4 независимых):**
+1. keymaster api_server: однопоточный HTTPServer без таймаутов — ЛЮБОЙ полуоткрытый коннект вешает сервис навсегда. Воспроизведено idle-сокетом.
+2. klod_dispatch.py: hash сообщения писался в seen ДО ответа — 429/timeout навсегда хоронил жалобу («Клод молчит»). Плюс потерян фикс 12.06: модель снова flash вместо pro.
+3. lineman_retention (cron 03:00): ежедневный холостой VACUUM (saved 0.0MB) блокировал lineman.db до 7м38с → Lineman API вставал → dispatch глох. PM2-даунтаймы 03:01 (10/19/25/30.06, 3.07) = pm2 kill+resurrect (ExecStop/ExecStart pm2-shectory.service) изнутри PM2-cgroup; инициатор не установлен, скриптов с `pm2 kill` в системе нет — ловим через klod_sentry.
+4. Зомби: syslog-srv.service рестарт-петля каждые 5с (каталог удалён); federation_sweep слал задачи в лежащий ollama (591×502/сутки); lazy_worker без import json (task-split всегда падал); main.py DEBUG+asyncio debug в проде (3MB/сутки stderr); openclaw поллил бота Ключника параллельно с api_server (getUpdates Conflict-петля, вклад в 47k TG-коннектов/сутки).
+
+**Fix:** lineman 25d858c (sentry+VACUUM-гейт+INFO-логи+ollama-гейт+import json), klod-foreman a60c8d3 (seen после ответа+ретраи+pro/flash+журнал+heartbeat), keymaster cd570e2 (ThreadingHTTPServer+timeout 30s+lock), scripts 1223677 (TG-алерт без спама). syslog-srv disabled. openclaw keymaster.enabled=false (ВНИМАНИЕ: openclaw не принимает лишних ключей в config — disabledReason уронил гейтвей в крашлуп, убран).
+
+**Новый контур:** scripts/klod_sentry.py (cron */5) — проба портов по факту, JSONL-история ~/logs/klod/sentry.jsonl, авторестарт keymaster-api/klod-dispatch (cooldown 30м, max 3/сутки), TG только на смену состояния. Журнал операций диспетчера: ~/logs/klod/dispatch_actions.jsonl, heartbeat ~/.klod/dispatch_heartbeat.
+
+**Открыто у Бори:** дубль-поллинг @ShectoryKlodBot (openclaw default vs klod-tg-bot), Gemini 429 квота (842/сутки), pre-approve SHECTORY_AUTH_BRIDGE_SECRET для career-bot.
