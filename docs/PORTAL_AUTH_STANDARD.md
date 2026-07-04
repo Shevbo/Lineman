@@ -51,8 +51,9 @@ Content-Type: application/json
 - `bcrypt.compare(password, passwordHash)` не сошёлся → **401**.
 - успех → **200** `{ ok: true, email, role, fullName }`. Роли: `user|admin|superadmin`.
 
-Только **полный email** как логин (каталог не знает «локальную часть»). `bshevelev@mail.ru`
-= **superadmin** во всех проектах.
+Только **полный email** как логин (каталог не знает «локальную часть»). Роль `superadmin`
+привязана к email владельца в таблице `portal_users` (конкретный адрес — в Keymaster
+`OWNER_PORTAL_EMAIL`, не хардкодить в коде/доках). Роль приходит из каталога, не из конфига.
 
 ## Конфиг (env, ВЕРХНИЙ_РЕГИСТР)
 
@@ -60,7 +61,7 @@ Content-Type: application/json
 |---|---|---|
 | `SHECTORY_PORTAL_URL` | база портала | прод `https://shectory.ru`; на smain локально `http://127.0.0.1:3000` |
 | `SHECTORY_AUTH_BRIDGE_SECRET` | общий секрет с порталом | **то же значение** в `.env` портала и у потребителя. В чат/лог/коммит не печатать. Авто-ротируется как `*AUTH_BRIDGE*` (см. leak-протокол Keymaster) |
-| `SHECTORY_LOGIN_EMAIL_DOMAIN` | `[consumer]` достроить bare-login → email | напр. `mail.ru`: `bshevelev` → `bshevelev@mail.ru` |
+| `SHECTORY_LOGIN_EMAIL_DOMAIN` | `[consumer]` достроить bare-login → email | напр. домен `example.com`: `user` → `user@example.com` |
 | `SHECTORY_LOCAL_USER_EMAIL` / `SHECTORY_LOCAL_USER_PASSWORD_SHA256` | `[consumer]` break-glass | один аварийный юзер, только когда портал недоступен/не-200; sha256-hex, сравнение `hmac.compare_digest` |
 | `AUTH_DEBUG` | явное включение debug-входа | `1` + непрод-признак (см. ниже). По умолчанию НЕ задан = debug выключен |
 
