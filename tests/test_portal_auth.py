@@ -49,6 +49,15 @@ async def test_verify_portal_credentials_no_secret(srv, monkeypatch):
     assert await srv._verify_portal_credentials("a@b.c", "x") is False
 
 
+def test_session_no_secret_fail_closed(srv, monkeypatch):
+    """Регрессия 2026-07-04: пустой секрет = отказ, НЕ debug-вход (fail-open).
+    Токен, выпущенный при пустом секрете, не должен проходить проверку."""
+    monkeypatch.delenv("SHECTORY_AUTH_BRIDGE_SECRET", raising=False)
+    tok = srv._make_session_token("a@b.c")
+    assert srv._verify_session_token(tok) is None
+    assert srv._session_email_from_cookie({"cookie": f"shectory_session={tok}"}) is None
+
+
 @pytest.mark.asyncio
 async def test_verify_portal_credentials_cache_hit(srv):
     import hashlib

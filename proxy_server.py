@@ -225,6 +225,26 @@ class ProxyServer:
             return False
         return any(ip in net for net in self._ADMIN_ALLOW_NETS)
 
+    def _push_url_internal(self, url: str) -> bool:
+        """True если push-URL указывает внутрь федерации (WG/loopback).
+
+        Барьер против угона outbox (аудит 2026-07-04): регистрировать доставку
+        можно только на федерационные хосты, не на внешний адрес атакующего.
+        Хостнейм без IP (напр. `smain`, `hoster`) допускаем — это WG-имена узлов;
+        сырой публичный IP/домен отклоняем."""
+        try:
+            host = (urlparse(url).hostname or "").strip()
+        except Exception:
+            return False
+        if not host:
+            return False
+        if host in ("localhost",) or host.endswith(".local") or "." not in host:
+            return True  # loopback или короткое WG-имя узла (smain/hoster/sdev)
+        try:
+            return self._is_admin_allowed(host)  # 10.66/127/TS/docker сети
+        except ValueError:
+            return False
+
     def _path_requires_admin(self, path: str) -> bool:
         """True если путь нельзя дёргать с публичного интернета."""
         if path in self._PUBLIC_API_PATHS:
@@ -322,6 +342,20 @@ class ProxyServer:
         # через себя»). Конфиг: config.json → klod_ask. allowed_agents (None|["*"]
         # |list), budget {default: {per_hour, per_day}, agents: {...}}.
         self._klod_ask_cfg: dict[str, Any] = self._config.get("klod_ask", {}) or {}
+        # Эффективный allowlist из реестра §13 (node_map + federation_registry +
+        # extra_agents), а не самодекларации. None только при явном ["*"].
+        # Закрыт 2026-07-04 (аудит): поле agent неаутентифицировано, но неизвестные
+        # имена больше не проходят — атрибуция и бюджеты работают по known-set.
+        try:
+            self._klod_ask_allowed = klod_ask.resolve_allowed_agents(
+                self._config, load_registry())
+        except Exception:
+            self._klod_ask_allowed = klod_ask.resolve_allowed_agents(self._config, None)
+        if self._klod_ask_allowed is None:
+            logger.warning("klod_ask_allowlist_open",
+                           note="allowed_agents=['*'] — аварийный открытый режим")
+        else:
+            logger.info("klod_ask_allowlist_closed", count=len(self._klod_ask_allowed))
         # In-memory счётчик (ts, agent) — окно 24ч, trim каждый запрос.
         self._klod_ask_recent: list[tuple[float, str]] = []
         # Cooldown Google после 429: шторм 2026-07-03 — потребители klod/ask
@@ -1188,6 +1222,18 @@ class ProxyServer:
                         pass
                 if not agent:
                     return self._send_simple_and_close(wr, 400, {"error": "missing 'agent'"})
+                # Проверка владения (аудит 2026-07-04): без per-agent секрета
+                # доступны две проверки — (1) агент должен быть в реестре §13,
+                # чтобы нельзя было регать endpoint за произвольное имя; (2) URL
+                # обязан указывать ВНУТРЬ федерации (WG/loopback) — иначе можно
+                # увести чужой outbox на внешний хост и перехватывать сообщения.
+                if not klod_ask.is_agent_allowed(agent, self._klod_ask_allowed):
+                    return self._send_simple_and_close(
+                        wr, 403, {"error": f"agent {agent!r} not in federation registry (§13)"})
+                if url_val and not self._push_url_internal(url_val):
+                    return self._send_simple_and_close(wr, 403, {
+                        "error": "push url must target federation-internal host "
+                                 "(10.66.0.0/24 WG или loopback), не внешний адрес"})
                 try:
                     urls = klod_inbox.set_push_url(agent, url_val or None)
                 except ValueError as ve:
@@ -2263,9 +2309,14 @@ class ProxyServer:
             context_size = None
 
         cfg = self._klod_ask_cfg
-        if not klod_ask.is_agent_allowed(agent, cfg.get("allowed_agents")):
+        if not klod_ask.is_agent_allowed(agent, self._klod_ask_allowed):
+            klod_ask.audit_log({
+                "ts": time.time(), "agent": agent, "ok": False,
+                "blocked_by": "allowlist",
+            })
             return self._send_simple_and_close(
-                wr, 403, {"error": f"agent {agent!r} not in allowlist"})
+                wr, 403, {"error": f"agent {agent!r} not in federation registry "
+                                   f"(§13). Пройди онбординг / попроси Клода добавить."})
         if not prompt:
             return self._send_simple_and_close(wr, 400, {"error": "need prompt"})
 

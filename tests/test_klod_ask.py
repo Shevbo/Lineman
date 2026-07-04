@@ -55,9 +55,13 @@ def test_is_agent_allowed_empty_agent_rejected():
     assert klod_ask.is_agent_allowed("  ", None) is False
 
 
-def test_is_agent_allowed_wildcard_lets_named():
-    assert klod_ask.is_agent_allowed("career-bot", ["*"]) is True
-    assert klod_ask.is_agent_allowed("nurse", None) is True  # пустой allow = открыто
+def test_is_agent_allowed_open_mode_none():
+    # None = открытый режим (резолвер отдаёт None только при явном ["*"]).
+    # Раскрытие "*" теперь в resolve_allowed_agents, не в is_agent_allowed.
+    assert klod_ask.is_agent_allowed("nurse", None) is True
+    # Список (даже содержащий "*") трактуется как закрытый — членство обязательно.
+    assert klod_ask.is_agent_allowed("career-bot", ["*"]) is False
+    assert klod_ask.is_agent_allowed("career-bot", {"career-bot"}) is True
 
 
 def test_is_agent_allowed_explicit_list():
@@ -257,3 +261,34 @@ def test_is_quota_error():
     assert is_quota_error("code=RESOURCE_EXHAUSTED")
     assert not is_quota_error("upstream HTTP 500: boom")
     assert not is_quota_error("")
+
+
+def test_resolve_allowed_agents_closed_by_default():
+    from klod_ask import resolve_allowed_agents, is_agent_allowed
+    cfg = {"agents": {"node_map": {"smain": ["nurse", "titan", "main"]}},
+           "klod_ask": {"extra_agents": ["career-bot"]}}
+    reg = {"components": [{"type": "agent", "id": "eshkola"},
+                          {"type": "service", "id": "lineman"}]}
+    allowed = resolve_allowed_agents(cfg, reg)
+    assert allowed == {"nurse", "titan", "career-bot", "eshkola"}  # main вырезан, service не агент
+    assert is_agent_allowed("nurse", allowed)
+    assert not is_agent_allowed("evil", allowed)
+    assert not is_agent_allowed("main", allowed)
+    assert not is_agent_allowed("", allowed)
+
+
+def test_resolve_allowed_agents_explicit_wildcard_opens():
+    from klod_ask import resolve_allowed_agents, is_agent_allowed
+    cfg = {"klod_ask": {"allowed_agents": ["*"]}}
+    allowed = resolve_allowed_agents(cfg, None)
+    assert allowed is None  # аварийный открытый режим
+    assert is_agent_allowed("anyone", allowed)
+    assert not is_agent_allowed("", allowed)  # пустой всё равно нельзя
+
+
+def test_resolve_allowed_agents_explicit_list():
+    from klod_ask import resolve_allowed_agents, is_agent_allowed
+    cfg = {"klod_ask": {"allowed_agents": ["only-me"]}}
+    allowed = resolve_allowed_agents(cfg, None)
+    assert allowed == {"only-me"}
+    assert not is_agent_allowed("nurse", allowed)

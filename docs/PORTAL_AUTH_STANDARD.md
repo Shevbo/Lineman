@@ -62,8 +62,22 @@ Content-Type: application/json
 | `SHECTORY_AUTH_BRIDGE_SECRET` | общий секрет с порталом | **то же значение** в `.env` портала и у потребителя. В чат/лог/коммит не печатать. Авто-ротируется как `*AUTH_BRIDGE*` (см. leak-протокол Keymaster) |
 | `SHECTORY_LOGIN_EMAIL_DOMAIN` | `[consumer]` достроить bare-login → email | напр. `mail.ru`: `bshevelev` → `bshevelev@mail.ru` |
 | `SHECTORY_LOCAL_USER_EMAIL` / `SHECTORY_LOCAL_USER_PASSWORD_SHA256` | `[consumer]` break-glass | один аварийный юзер, только когда портал недоступен/не-200; sha256-hex, сравнение `hmac.compare_digest` |
+| `AUTH_DEBUG` | явное включение debug-входа | `1` + непрод-признак (см. ниже). По умолчанию НЕ задан = debug выключен |
 
-**Секрет пуст → auth-debug-режим** (любой запрос = пользователь `debug`). В прод секрет обязателен.
+### Пустой секрет = отказ (fail-closed, ОБЯЗАТЕЛЬНО)
+
+**Секрет `SHECTORY_AUTH_BRIDGE_SECRET` пуст или не задан → любой вход отклоняется (503/401), НЕ пропускать.**
+Раньше стандарт разрешал «пустой секрет → debug-пользователь» — это fail-open: незаданная
+переменная окружения открывала вход кому угодно. Отменено 2026-07-04.
+
+Debug-вход (обход bridge для локальной разработки) допустим ТОЛЬКО при одновременно:
+1. `AUTH_DEBUG=1` задан явно, И
+2. непрод-признак: `SHECTORY_ENV` ∈ {`dev`,`local`,`test`} ИЛИ хост биндится на `127.0.0.1`/loopback.
+
+Если `AUTH_DEBUG=1` выставлен, но окружение выглядит продовым (`SHECTORY_ENV=prod` или публичный
+бинд) — потребитель обязан игнорировать debug и работать fail-closed. Эталон (Lineman): при пустом
+секрете `_verify_portal_credentials` возвращает `False`, `_verify_session_token` → `None` (вход закрыт).
+Портал при пустом секрете отвечает **503**, не пропуская проверку.
 
 ## Сессия у потребителя (после успешного verify)
 

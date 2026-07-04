@@ -507,6 +507,20 @@
           "per_day": 0
         }
       }
-    }
+    },
+    "extra_agents": [
+      "bandit",
+      "career-bot",
+      "censor",
+      "ea",
+      "garden-manager",
+      "keymaster",
+      "keymaster-bot",
+      "klod-stl",
+      "portal",
+      "promptmaster",
+      "shectory-portal",
+      "smarthome"
+    ]
   }
 }

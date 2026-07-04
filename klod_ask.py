@@ -97,13 +97,47 @@ def resolve_explicit(provider: str, model: str) -> tuple[str, str]:
     return p, m
 
 
-def is_agent_allowed(agent: str, allowlist: Optional[list]) -> bool:
-    """allowlist == None или ['*'] → пускаем всех, кто прислал непустой agent.
-    Иначе требуем имя в списке."""
+LIQUIDATED_AGENTS = {"main"}  # Tank ликвидирован 2026-07-03
+
+
+def resolve_allowed_agents(config: dict, registry: Optional[dict] = None) -> Optional[set]:
+    """Эффективный allowlist /api/klod/ask из реестра §13, а не самодекларации.
+
+    Источники (объединение): config.agents.node_map, агенты federation_registry
+    (type==agent) и явный klod_ask.extra_agents (внешние потребители, которых нет
+    в node_map: career-bot, klod-stl, porta и т.п.).
+
+    Возврат:
+      set[str] — закрытый список (по умолчанию, fail-closed);
+      None     — только если klod_ask.allowed_agents == ["*"] ЯВНО задан
+                 (аварийный обход, логируется как открытый режим).
+    """
+    ka = (config.get("klod_ask") or {})
+    explicit = ka.get("allowed_agents")
+    if explicit == ["*"]:
+        return None  # явный аварийный «открыто всем»
+    if explicit:  # полностью явный список — доверяем как есть
+        return set(explicit)
+    allowed: set = set()
+    node_map = (config.get("agents") or {}).get("node_map") or {}
+    for ids in node_map.values():
+        allowed.update(ids)
+    for comp in ((registry or {}).get("components") or []):
+        if comp.get("type") == "agent" and comp.get("id"):
+            allowed.add(comp["id"])
+    allowed.update(ka.get("extra_agents") or [])
+    return allowed - LIQUIDATED_AGENTS
+
+
+def is_agent_allowed(agent: str, allowlist) -> bool:
+    """allowlist:
+      None      → открытый режим (только при явном ["*"] в конфиге);
+      set/list  → закрытый, требуем членство.
+    Пустой agent запрещён всегда."""
     agent = (agent or "").strip()
     if not agent:
         return False
-    if not allowlist or allowlist == ["*"]:
+    if allowlist is None:
         return True
     return agent in allowlist
 
