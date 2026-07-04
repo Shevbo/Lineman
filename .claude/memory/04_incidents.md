@@ -317,3 +317,19 @@ Lineman node_map «main» не тронут: очередь /api/agent/main/mess
 2. ВСЕ кроны hoster обёрнуты `flock -n + timeout` (heartbeat 50с, healthcheck 240с, reminders 50с, warm_bars 3000с, бэкапы 3600с) — пайлап процессов невозможен.
 3. ~/scripts/memguard.sh (cron */5): MemAvailable<400MB → снимок топ-процессов в ~/.memguard/ + TG-алерт через Lineman (дедуп 6ч).
 **Грабли:** `cmd | python3 - <<EOF | crontab -` — heredoc ЗАМЕЩАЕТ stdin пайпа, python получил пустой stdin и кронтаб был затёрт до 1 строки. Восстановлен из бэкапа (~/crontab.bak-memguard-*), правка через файл /tmp/fix_cron.py. Перед правкой чужого кронтаба — ВСЕГДА `crontab -l > bak`.
+
+### 2026-07-04 Security-аудит онбординг-канона федерации (7 findings, П1-П7)
+
+Не инцидент, плановый аудит. Коммиты Lineman: 53ad6d9 (код П1-П3 + тесты), ebc58bc (стандарт).
+Канон /home/shectory/docs/FEDERATION_AGENT_ONBOARDING.md + модули untracked (правятся onboarding_refresh ежедневно, живут на диске).
+
+- П1 portal-auth fail-open: контракт «пустой SHECTORY_AUTH_BRIDGE_SECRET → debug-вход» убран (PORTAL_AUTH_STANDARD.md). Пустой секрет = отказ; debug только AUTH_DEBUG=1 + непрод. Lineman уже был fail-closed (_verify_portal_credentials→False, _verify_session_token→None) — залочено test_session_no_secret_fail_closed.
+- П2 /api/klod/ask allowlist ЗАКРЫТ: было allowed_agents=None (открыто всем, agent самодекларация). Теперь klod_ask.resolve_allowed_agents(config, registry) = node_map ∪ federation_registry(type=agent) ∪ klod_ask.extra_agents − LIQUIDATED. None только при явном ["*"]. extra_agents в config.json: career-bot,klod-stl,portal,shectory-portal,keymaster,keymaster-bot,smarthome,bandit,promptmaster,garden-manager,ea,censor. Неизвестный→403.
+- П3 /push_url ownership: agent обязан быть в реестре + _push_url_internal(url) требует WG/loopback/короткое-имя-узла (нельзя увести outbox на внешний хост). Per-agent крипто-идентичности НЕТ — доверенная граница = членство в WG (остаточный риск в §3.1).
+- П4 таблица model_hint помечена иллюстративной, сокращена 26→6; истина /api/klod/models.
+- П5 канон рассечён: ядро (§0-§3,§7) + JIT-модули docs/onboarding-modules/{tts,live-audio}.md + portal-auth. Механизм: поле modules: в .onboarding/AGENT.md, скрипт ~/.claude/skills/onboarding/bin/fetch_module.sh (тот же 3-fallback что fetch_canon). Голос/nginx больше не в ядре.
+- П6 хардкод убран: chat_id 36910539, superadmin-email, публичный IP → плейсхолдеры + Keymaster (BORIS_CHAT_ID/OWNER_PORTAL_EMAIL/SMAIN_PUBLIC_IP).
+- П7 §1.1: SPOF shevbo-pi задокументирован (hardening ssh-only, мониторинг доступности, offline-очередь + сигнал Боре при падении jump).
+
+Самодостаточный обзор для Бори: /home/shectory/docs/FEDERATION_ONBOARDING_FULLTEXT.md (ядро+все модули+стандарт, 0 внешних отсылок).
+Грабли klod_ask allowlist: реальные потребители шире node_map — при закрытии свериться с ~/.cache/klod_ask.log.jsonl, иначе 403 живым (career-bot/klod-stl не в реестре, добавлены в extra_agents).
