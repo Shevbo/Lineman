@@ -305,7 +305,7 @@
   "reverse_proxy": {
     "ctx_hard_limit": 500000,
     "daily_token_caps": {
-      "deepseek": 1000000,
+      "deepseek": 3000000,
       "anthropic": 1000000000
     },
     "upstreams": {
