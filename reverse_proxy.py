@@ -271,24 +271,41 @@ def _get_token_cap(config: dict) -> DailyTokenCap:
     global _TOKEN_CAP
     if _TOKEN_CAP is not None:
         return _TOKEN_CAP
-    caps = ((config or {}).get("reverse_proxy", {}) or {}).get("daily_token_caps", {}) or {}
-    cap = DailyTokenCap(caps)
+    rp_cfg = (config or {}).get("reverse_proxy", {}) or {}
+    caps = rp_cfg.get("daily_token_caps", {}) or {}
+    agent_caps = rp_cfg.get("daily_agent_token_caps", {}) or {}
+    cap = DailyTokenCap(caps, agent_caps)
     day = _today_msk()
+    db = (config or {}).get("db_path") or str(BASE_DIR / "lineman.db")
+
+    def _seed_q(where_sql: str, params: tuple):
+        import sqlite3
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
+        try:
+            row = con.execute(
+                "SELECT COALESCE(SUM(COALESCE(tokens_in,0)+COALESCE(tokens_out,0)),0) "
+                "FROM request_log WHERE " + where_sql, params).fetchone()
+            return int(row[0]) if row and row[0] else 0
+        finally:
+            con.close()
+
     # Сид: рестарт Lineman не должен обнулять дневной расход (иначе кап обходится рестартом).
     for prov in cap.caps:
         try:
-            import sqlite3
-            db = (config or {}).get("db_path") or str(BASE_DIR / "lineman.db")
-            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
-            row = con.execute(
-                "SELECT COALESCE(SUM(COALESCE(tokens_in,0)+COALESCE(tokens_out,0)),0) "
-                "FROM request_log WHERE llm_provider=? AND timestamp >= ?",
-                (prov, day + "T00:00:00")).fetchone()
-            con.close()
-            if row and row[0]:
-                cap.seed(prov, int(row[0]), day)
+            cap.seed(prov, _seed_q("llm_provider=? AND timestamp >= ?",
+                                   (prov, day + "T00:00:00")), day)
         except Exception:
             pass
+    # Per-agent сид: request_log хранит source_agent как "career-bot" ИЛИ "claude-cli:career-bot".
+    for ag, provmap in cap.agent_caps.items():
+        for prov in provmap:
+            try:
+                cap.seed(prov, _seed_q(
+                    "llm_provider=? AND timestamp >= ? AND "
+                    "(source_agent=? OR source_agent=?)",
+                    (prov, day + "T00:00:00", ag, f"claude-cli:{ag}")), day, agent=ag)
+            except Exception:
+                pass
     _TOKEN_CAP = cap
     return _TOKEN_CAP
 
@@ -711,6 +728,18 @@ async def handle_reverse_proxy(
             f"Дневной лимит токенов провайдера '{provider}' исчерпан на {_day} "
             f"(контроль траты). Сброс в полночь MSK. См. /api/token-caps.")
         return
+    # Per-agent дневной кап — один жадный потребитель не роняет общий аккаунт
+    # (career-bot жёг 71M anthropic/сутки, rate-limit прилетал ВСЕМ). 2026-07-05.
+    if agent_name and not _cap.allow_agent(agent_name, provider, _day):
+        logger.warning("rproxy_agent_cap_blocked", agent=agent_name,
+                       provider=provider, day=_day,
+                       cap=_cap.agent_cap(agent_name, provider))
+        await _send_json_error(
+            writer, 429,
+            f"[LINEMAN GUARD] Агент '{agent_name}': дневной лимит токенов "
+            f"'{provider}' исчерпан на {_day}. Суммаризируй/уменьши контекст или "
+            f"перейди на deepseek/local. Сброс в полночь MSK.")
+        return
 
     # Dedup cache — check for identical request, record call for retry analysis
     _dedup_key: str | None = None
@@ -975,7 +1004,8 @@ async def handle_reverse_proxy(
             # Учёт потраченных токенов в дневной кап провайдера (жёсткий потолок траты)
             try:
                 _get_token_cap(config).record(
-                    provider, (tokens_in or 0) + (tokens_out or 0), _today_msk())
+                    provider, (tokens_in or 0) + (tokens_out or 0), _today_msk(),
+                    agent=agent_name or None)
             except Exception:
                 pass
             row = {

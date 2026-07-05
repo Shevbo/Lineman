@@ -314,7 +314,20 @@
       "deepseek": "https://api.deepseek.com",
       "google": "https://generativelanguage.googleapis.com",
       "anthropic": "https://api.anthropic.com"
-    }
+    },
+    "daily_agent_token_caps": {
+      "career-bot": {
+        "anthropic": 20000000
+      },
+      "klod-access": {
+        "anthropic": 10000000
+      }
+    },
+    "claude_cli_daily_budgets": {
+      "career-bot": 20000000,
+      "lineman": 25000000
+    },
+    "claude_cli_default_budget": 30000000
   },
   "gemini_pro": {
     "default_hours": 3,
