@@ -257,6 +257,8 @@ _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503})
 # --- Жёсткий дневной кап токенов на провайдера (deepseek жёг миллионы/день) ---
 from datetime import datetime as _dt, timezone as _tz, timedelta as _td  # noqa: E402
 from token_cap import DailyTokenCap  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+BASE_DIR = _Path(__file__).resolve().parent  # lineman module dir; fallback для db_path (fix NameError 2026-07-06)
 
 _MSK = _tz(_td(hours=3))
 _TOKEN_CAP: DailyTokenCap | None = None
