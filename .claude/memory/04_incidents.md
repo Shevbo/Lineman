@@ -1,6 +1,42 @@
 # Журнал инцидентов Lineman
 
-## 2026-06-29 — Messaging-инфраструктура: 1a (push), 2 (catch-all), 3 (daily-report)
+## 2026-07-20 — Anthropic-совместимый шлюз для внешних агентов (ltx-паттерн)
+
+**Запрос:** ltx (агент на vs-code-local / i9, Windows/CDP) через klod-access inbox: Claude Code CLI ходит в LLM только по Anthropic Messages API (`ANTHROPIC_BASE_URL` + OAuth), `/api/klod/ask` (prompt→text) для этого не годится, прямой `/proxy/anthropic` был закрыт нормой канона.
+
+**Решение (без нового endpoint):** тот же `/proxy/anthropic/*` + автоинжект OAuth Klod для агентов из нового allowlist `config.reverse_proxy.anthropic_agent_allowlist`.
+
+- [reverse_proxy.py:88-137](../../reverse_proxy.py#L88-L137): `_load_klod_anthropic_oauth()` (читает `~/.claude/.credentials.json`) + `maybe_inject_anthropic_oauth()` (pure-функция, статусы `injected/not_in_allowlist/no_token/not_applicable`).
+- [reverse_proxy.py:868-887](../../reverse_proxy.py#L868-L887): вызов инжектора в handle_reverse_proxy перед `google`-блоком. Срезает клиентские `x-api-key`/`authorization`, подставляет Bearer + `anthropic-beta: oauth-2025-04-20`. Без OAuth → 503.
+- [config.json:318-330](../../config.json#L318-L330): `anthropic_agent_allowlist: ["ltx"]` + `daily_agent_token_caps.ltx.anthropic: 5000000`.
+- Тесты: `tests/test_reverse_proxy.py` — 9 новых, включая config-регрессию. Сюита 213 → 222.
+
+**Клиентский контракт** (для будущих внешних агентов): `ANTHROPIC_BASE_URL=http://10.66.0.1:9090/proxy/anthropic`, `ANTHROPIC_AUTH_TOKEN=stub`, `ANTHROPIC_CUSTOM_HEADERS='{"X-Agent-Name":"<id>"}'`. Общие гарды (ctx_hard_limit 500K, daily cap, circuit breaker) применяются.
+
+**Verify:**
+```
+curl -X POST http://127.0.0.1:9090/proxy/anthropic/v1/messages \
+  -H 'X-Agent-Name: ltx' -H 'anthropic-version: 2023-06-01' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"claude-haiku-4-5-20251001","max_tokens":20,"system":"You are Claude Code, Anthropic'"'"'s official CLI for Claude.","messages":[{"role":"user","content":"say hi"}]}'
+# → 200 {"content":[{"type":"text","text":"Hey!"}],...}
+curl ... без X-Agent-Name  # → 401 x-api-key required (Lineman не инжектит, Anthropic отвергает)
+```
+
+**Как добавить нового внешнего агента:** дописать `<id>` в `anthropic_agent_allowlist` + свой `daily_agent_token_caps.<id>.anthropic` в config.json → рестарт Lineman.
+
+## 2026-07-20 — Klod в TG галлюцинирует статус тикета
+
+**Симптом:** Боря в @ShectoryKlodBot: «проверь тикет #b1784567542201» → «Я не вижу такой тикет». Тикет реально существовал (`new`, «Создать Anthropic-совместимый прокси для Claude Code CLI»).
+
+**Root cause:** `klod_tg_bot.backlog_snapshot` подмешивает в system-prompt ТОЛЬКО открытые тикеты (`new/sent/in_progress`), лимит 12 штук, без сортировки. Тикет мог не влезть в топ или быть уже `done`. LLM не имел данных и либо отвечал «не вижу», либо подменял ближайшим по смыслу id (реальная симптоматика — оба варианта в одной сессии). Прямого lookup'а по id из вопроса не было.
+
+**Fix (klod-foreman):** новая `backlog_lookup_ids(text)` — извлекает `#b<id>` из вопроса, ходит в `/api/backlog`, отдаёт факты как ЖЁСТКИЙ блок system-prompt («отвечай ТОЛЬКО этими фактами, не выдумывай»). Включает `done`. Помечает НЕ НАЙДЕН отдельно.
+
+- `klod_tg_bot.py`: [`backlog_lookup_ids`](../../../klod-foreman/klod_tg_bot.py) и подмешивание в handle().
+- Тесты: `tests/test_klod_tg_bot.py` — 5 новых, сюита 115 → 120.
+
+
 
 **Диагноз (по запросу Бори):** push «я → агент» через `GET /api/agent/<id>/message` валился HTTP 500 для всех 13 агентов node_map (Lineman звал `openclaw agent --agent <id>...` через subprocess, а `openclaw` CLI снесён после ликвидации Tank 2026-06-16). Для агентов вне node_map (career-bot, garden, codex) был HTTP 404. push-канал к 13 агентам по сути не работал; никто из них не зарегистрировал push_url; outbox.jsonl пишется (54KB), но агенты его не поллят.
 
@@ -333,3 +369,18 @@ Lineman node_map «main» не тронут: очередь /api/agent/main/mess
 
 Самодостаточный обзор для Бори: /home/shectory/docs/FEDERATION_ONBOARDING_FULLTEXT.md (ядро+все модули+стандарт, 0 внешних отсылок).
 Грабли klod_ask allowlist: реальные потребители шире node_map — при закрытии свериться с ~/.cache/klod_ask.log.jsonl, иначе 403 живым (career-bot/klod-stl не в реестре, добавлены в extra_agents).
+
+### 2026-07-05 «Ни одна LLM недоступна» — тройное исчерпание облака + жор claude-cli
+
+**Симптом:** утром все агенты без облачных LLM, Клод-бот в ТГ пишет «нет LLM». Паника, обвинение в security-правках 04.07.
+**Диагноз (мои правки НИ ПРИ ЧЁМ — 0 блокировок allowlist за час):** совпали три причины:
+1. Anthropic: общий OAuth-аккаунт в rate-limit. Виновник — claude-cli:career-bot 71M токенов/сутки (avg 486k/вызов, несжатые контексты) + claude-cli:lineman(я) 21M. Итого 92M Opus/сутки.
+2. DeepSeek: упёрт в Lineman-кап 1M/сутки (НЕ лимит провайдера). Поднял 1M→3M (commit ea1263a).
+3. Gemini: квота Google + мой cooldown.
+**Ключевой факт:** claude-cli:<ws> (Claude Code) ходит в Anthropic НАПРЯМУЮ, минуя Lineman (env без ANTHROPIC_BASE_URL, TLS-туннель). Lineman видит их токены только постфактум через session_import (~/.claude/projects → request_log, крон 33 */2). Live-кап на claude-cli НЕВОЗМОЖЕН — только алерт.
+**Fixes:**
+- Кросс-провайдерный каскад: klod_tg_bot + klod_dispatch падали в «нет LLM» на claude→gemini. Добавлен DeepSeek+локаль (klod-foreman d736d87). Один упавший провайдер больше не немит Клода.
+- Per-agent дневной anthropic-кап на ПРОКСИРУЕМОМ пути (token_cap+reverse_proxy, commit a73c955): career-bot 20M, klod-access 10M. Ловит /api/klod/ask, НЕ claude-cli.
+- scripts/claude_cli_budget_guard.py (cron :05 hourly): читает session-import, алертит Борю при превышении (career-bot 20M/lineman 25M/default 30M). Единственный рычаг для bypass-трафика.
+**Остаётся Боре:** полный enforcement claude-cli = роутинг Claude Code через Lineman (ANTHROPIC_BASE_URL=.../proxy/anthropic) — меняет запуск его основного инструмента, его решение.
+**Урок:** «легли» = не сервис упал, а общий аккаунт в rate-limit от одного жадного claude-cli. Диагностика жора: request_log категория route_applied=session-import = claude-cli (не live-прокси). Провайдер-тоталы: SELECT llm_provider,SUM(tokens) WHERE date=today.

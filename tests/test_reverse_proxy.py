@@ -102,3 +102,106 @@ def test_resolve_upstream_ollama_from_config():
     from reverse_proxy import _resolve_upstream
     url = _resolve_upstream("ollama-hoster", BATCH_CONFIG)
     assert url == "http://10.66.0.7:11434"
+
+
+# ---------------------------------------------------------------------------
+# Anthropic OAuth injection for allowlisted external agents (ltx и др.).
+# Клод-Access владеет OAuth, Claude Code CLI у ltx ключа не имеет — Lineman
+# подставляет свой Bearer только для agents, явно указанных в
+# reverse_proxy.anthropic_agent_allowlist.
+# ---------------------------------------------------------------------------
+
+ALLOWLIST_CFG = {
+    "reverse_proxy": {
+        "anthropic_agent_allowlist": ["ltx", "vboris2"],
+    }
+}
+
+
+def test_oauth_injected_for_allowlisted_agent():
+    from reverse_proxy import maybe_inject_anthropic_oauth
+    headers = {"content-type": "application/json", "x-api-key": "client-key-should-drop"}
+    status = maybe_inject_anthropic_oauth(
+        "anthropic", "ltx", headers, ALLOWLIST_CFG,
+        token_loader=lambda: "klod-oauth-token")
+    assert status == "injected"
+    assert headers["authorization"] == "Bearer klod-oauth-token"
+    assert headers["anthropic-beta"] == "oauth-2025-04-20"
+    assert "x-api-key" not in headers
+
+
+def test_oauth_not_injected_for_agent_outside_allowlist():
+    from reverse_proxy import maybe_inject_anthropic_oauth
+    headers = {"authorization": "Bearer client-token"}
+    status = maybe_inject_anthropic_oauth(
+        "anthropic", "career-bot", headers, ALLOWLIST_CFG,
+        token_loader=lambda: "klod-oauth-token")
+    assert status == "not_in_allowlist"
+    assert headers["authorization"] == "Bearer client-token"
+
+
+def test_oauth_not_applicable_for_google():
+    from reverse_proxy import maybe_inject_anthropic_oauth
+    headers = {}
+    status = maybe_inject_anthropic_oauth(
+        "google", "ltx", headers, ALLOWLIST_CFG,
+        token_loader=lambda: "klod-oauth-token")
+    assert status == "not_applicable"
+    assert "authorization" not in headers
+
+
+def test_oauth_not_applicable_when_no_agent_name():
+    from reverse_proxy import maybe_inject_anthropic_oauth
+    headers = {}
+    status = maybe_inject_anthropic_oauth(
+        "anthropic", None, headers, ALLOWLIST_CFG,
+        token_loader=lambda: "klod-oauth-token")
+    assert status == "not_applicable"
+
+
+def test_oauth_returns_no_token_when_loader_empty():
+    from reverse_proxy import maybe_inject_anthropic_oauth
+    headers = {}
+    status = maybe_inject_anthropic_oauth(
+        "anthropic", "ltx", headers, ALLOWLIST_CFG,
+        token_loader=lambda: "")
+    assert status == "no_token"
+    assert "authorization" not in headers
+
+
+def test_oauth_allowlist_missing_config_treated_as_empty():
+    from reverse_proxy import maybe_inject_anthropic_oauth
+    headers = {}
+    status = maybe_inject_anthropic_oauth(
+        "anthropic", "ltx", headers, {},
+        token_loader=lambda: "t")
+    assert status == "not_in_allowlist"
+
+
+def test_load_klod_anthropic_oauth_reads_credentials(tmp_path, monkeypatch):
+    from reverse_proxy import _load_klod_anthropic_oauth
+    creds_dir = tmp_path / ".claude"
+    creds_dir.mkdir()
+    (creds_dir / ".credentials.json").write_text(
+        json.dumps({"claudeAiOauth": {"accessToken": "abc123"}}))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import pathlib as _pl
+    monkeypatch.setattr(_pl.Path, "home", classmethod(lambda cls: _pl.Path(str(tmp_path))))
+    assert _load_klod_anthropic_oauth() == "abc123"
+
+
+def test_load_klod_anthropic_oauth_missing_returns_empty(tmp_path, monkeypatch):
+    from reverse_proxy import _load_klod_anthropic_oauth
+    import pathlib as _pl
+    monkeypatch.setattr(_pl.Path, "home", classmethod(lambda cls: _pl.Path(str(tmp_path))))
+    assert _load_klod_anthropic_oauth() == ""
+
+
+def test_config_json_declares_ltx_allowlist_and_cap():
+    """Регрессия конфига: ltx должен быть и в allowlist, и иметь дневной cap."""
+    import json as _json
+    from pathlib import Path
+    cfg = _json.loads((Path(__file__).resolve().parent.parent / "config.json").read_text())
+    rp = cfg["reverse_proxy"]
+    assert "ltx" in rp["anthropic_agent_allowlist"]
+    assert rp["daily_agent_token_caps"]["ltx"]["anthropic"] > 0

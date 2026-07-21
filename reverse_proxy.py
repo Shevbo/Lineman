@@ -83,6 +83,55 @@ def _mask_sensitive(text: str) -> str:
     return _mask_sensitive_impl(text) or ""
 
 
+def _load_klod_anthropic_oauth() -> str:
+    """Bearer-токен Klod-Access для Anthropic — та же кредуха, что использует
+    /api/klod/ask (_load_klod_oauth_token в proxy_server). Отдельная копия здесь,
+    чтобы reverse_proxy мог инжектить OAuth для агентов из
+    reverse_proxy.anthropic_agent_allowlist, у которых своего ключа нет
+    (Claude Code CLI у ltx/подобных). Возвращает '' при отсутствии/ошибке."""
+    try:
+        import pathlib
+        p = pathlib.Path.home() / ".claude/.credentials.json"
+        d = json.loads(p.read_text())
+        return (d.get("claudeAiOauth") or {}).get("accessToken", "") or ""
+    except Exception:
+        return ""
+
+
+def _anthropic_allowlist(config: dict | None) -> list:
+    return list(((config or {}).get("reverse_proxy", {})
+                 .get("anthropic_agent_allowlist") or []))
+
+
+def maybe_inject_anthropic_oauth(
+    provider: str,
+    agent_name: str | None,
+    fwd_headers: dict,
+    config: dict | None,
+    token_loader=_load_klod_anthropic_oauth,
+) -> str:
+    """Инжект Klod OAuth для anthropic-запросов от разрешённых агентов.
+
+    Мутирует fwd_headers на месте: подставляет Authorization/anthropic-beta,
+    вырезает клиентский x-api-key. Возвращает статус:
+      "not_applicable" — не anthropic / нет agent_name
+      "not_in_allowlist" — агент известен, но не в списке
+      "no_token" — allowlist ок, но OAuth недоступен (для 503)
+      "injected" — инжект сделан
+    """
+    if provider != "anthropic" or not agent_name:
+        return "not_applicable"
+    if agent_name not in _anthropic_allowlist(config):
+        return "not_in_allowlist"
+    tok = token_loader() or ""
+    if not tok:
+        return "no_token"
+    fwd_headers["authorization"] = f"Bearer {tok}"
+    fwd_headers["anthropic-beta"] = "oauth-2025-04-20"
+    fwd_headers.pop("x-api-key", None)
+    return "injected"
+
+
 _SUMMARIZE_PROMPT = (
     "Summarize this conversation in 5 bullet points. "
     "Preserve: decisions made, tool results, unresolved questions, key facts. Be terse."
@@ -839,6 +888,23 @@ async def handle_reverse_proxy(
         fwd_headers["content-length"] = str(len(req_body))
 
     upstream_url = upstream_base.rstrip("/") + rest_path
+
+    # Anthropic: инжект Klod OAuth Bearer для агентов из allowlist. Claude Code CLI
+    # у внешних агентов (ltx и т.п.) шлёт свой ключ через x-api-key/Authorization,
+    # но реальным Anthropic-доступом владеет только Klod. Разрешённым по имени
+    # агентам Lineman срезает клиентские креды и подставляет свой OAuth
+    # (тот же ~/.claude/.credentials.json, что использует /api/klod/ask).
+    # Гейт задаётся в config.reverse_proxy.anthropic_agent_allowlist (список agent_name).
+    _oauth_status = maybe_inject_anthropic_oauth(
+        provider, agent_name, fwd_headers, config)
+    if _oauth_status == "injected":
+        logger.info("anthropic_oauth_injected", agent=agent_name)
+    elif _oauth_status == "no_token":
+        logger.warning("anthropic_oauth_missing", agent=agent_name)
+        await _send_json_error(
+            writer, 503,
+            "Klod anthropic OAuth недоступен — обратись к klod-access.")
+        return
 
     # Google: Lineman — ЕДИНСТВЕННЫЙ держатель ключа. Срезаем любой клиентский ключ
     # (URL key= и заголовок x-goog-api-key) и инжектим эксклюзивный ключ Lineman.
