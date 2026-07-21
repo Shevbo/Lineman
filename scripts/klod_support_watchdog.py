@@ -40,6 +40,10 @@ HEARTBEAT_FILE = os.path.expanduser(
 
 V1_SELFPING_TIMEOUT_S = int(os.environ.get("KLOD_WD_V1_TIMEOUT_S", "300"))  # 5 мин
 V2_AGING_THRESHOLD_S = int(os.environ.get("KLOD_WD_V2_AGING_S", "1800"))    # 30 мин
+# Верхний лимит V2: тикеты старше — уже «болото» (я их проигнорил давно, cron
+# не должен спамить Боре каждые 5 мин). Разовый триаж делается вручную, а V2
+# фокусируется на СВЕЖИХ висяках 30мин…7дней.
+V2_AGING_UPPER_S = int(os.environ.get("KLOD_WD_V2_UPPER_S", "604800"))       # 7 дней
 V3_HEARTBEAT_MAX_AGE_S = int(os.environ.get("KLOD_WD_V3_HB_AGE_S", "180"))  # 3 мин
 ALERT_DEDUP_S = int(os.environ.get("KLOD_WD_ALERT_DEDUP_S", "3600"))        # 1ч
 
@@ -181,8 +185,8 @@ def v2_backlog_aging(st: dict) -> None:
             continue  # уже уведомили Борю про этот тикет
         created_ms = int(it.get("created") or 0)
         age_s = now - (created_ms // 1000)
-        if age_s < V2_AGING_THRESHOLD_S:
-            continue
+        if age_s < V2_AGING_THRESHOLD_S or age_s > V2_AGING_UPPER_S:
+            continue  # свежее 30мин или старше 7 дней — не алертим (см. константы)
         candidates.append((age_s, it))
     if not candidates:
         return
