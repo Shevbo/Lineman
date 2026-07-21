@@ -2755,6 +2755,11 @@ class ProxyServer:
                 return self._send_simple_and_close(wr, 400, {"error": str(e)})
             if not upd:
                 return self._send_simple_and_close(wr, 404, {"error": "not found"})
+            # Автопинг Бори при закрытии OPS-тикета (пришедшего от агента, не от Бори).
+            # Различаем по note: klod_dispatch пишет "жалоба от <agent> (чат федерации)".
+            # 2026-07-21 регрессия: STL висел в трекере без разбора, Боря узнавал постфактум.
+            if upd.get("status") == "done" and "жалоба от" in (upd.get("note") or ""):
+                asyncio.create_task(self._notify_boris_ticket_done(upd))
             return self._send_simple_and_close(wr, 200, {"ok": True, "item": upd})
 
         if method == "POST" and path == "/api/backlog/remove":
@@ -2762,6 +2767,34 @@ class ProxyServer:
             return self._send_simple_and_close(wr, 200 if ok else 404, {"ok": ok})
 
         return self._send_simple_and_close(wr, 400, {"error": "bad backlog request"})
+
+    async def _notify_boris_ticket_done(self, item: dict) -> None:
+        """Fire-and-forget TG-уведомление Бори о закрытии OPS-тикета от агента.
+        Формат: '#bid title — done'. Дедуп реализован в /api/tg/send (msg-hash 60s)."""
+        bid = item.get("id", "?")
+        title = (item.get("title") or "")[:200]
+        note = (item.get("note") or "")
+        agent = ""
+        try:
+            m = re.search(r"жалоба от ([A-Za-z0-9_.@-]{1,64})", note)
+            if m:
+                agent = m.group(1)
+        except Exception:
+            pass
+        text = (f"Клод-Доступ: завершил OPS от {agent or 'агента'} — "
+                f"«{title}». Тикет #{bid} → done.")
+        chat_id = os.environ.get("BORIS_TG_CHAT_ID", "36910539")
+        try:
+            if self._upstream_session is None:
+                return
+            async with self._upstream_session.post(
+                "http://127.0.0.1:9090/api/tg/send",
+                json={"account": "default", "chat_id": chat_id, "text": text[:3800]},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                await resp.read()  # drain
+        except Exception as e:
+            logger.warning("boris_notify_done_fail", err=str(e)[:160], bid=bid)
 
     def _gp_boris_authorized(self, headers: dict) -> bool:
         """True если запрос пришёл от Бори через Telegram Mini App (initData подписан токеном
