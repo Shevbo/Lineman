@@ -130,6 +130,39 @@ def test_oauth_injected_for_allowlisted_agent():
     assert "x-api-key" not in headers
 
 
+def test_oauth_merges_client_anthropic_beta():
+    """Claude Code CLI шлёт свои beta-флаги (context-management-2025-06-27 для 1M
+    Opus 4.8, prompt-caching и т.п.). Merge — не replace, иначе 400. Регрессия
+    2026-07-22 (ltx OPS #b1784669156558)."""
+    from reverse_proxy import maybe_inject_anthropic_oauth
+    headers = {"anthropic-beta": "context-management-2025-06-27"}
+    status = maybe_inject_anthropic_oauth(
+        "anthropic", "ltx", headers, ALLOWLIST_CFG,
+        token_loader=lambda: "klod-oauth-token")
+    assert status == "injected"
+    parts = [p.strip() for p in headers["anthropic-beta"].split(",")]
+    assert "context-management-2025-06-27" in parts
+    assert "oauth-2025-04-20" in parts
+
+
+def test_oauth_deduplicates_beta_flag():
+    """Клиент уже прислал oauth-2025-04-20 — не должно быть дубля."""
+    from reverse_proxy import maybe_inject_anthropic_oauth
+    headers = {"anthropic-beta": "oauth-2025-04-20, prompt-caching-2024-07-31"}
+    maybe_inject_anthropic_oauth(
+        "anthropic", "ltx", headers, ALLOWLIST_CFG,
+        token_loader=lambda: "tok")
+    parts = [p.strip() for p in headers["anthropic-beta"].split(",")]
+    assert parts.count("oauth-2025-04-20") == 1
+    assert "prompt-caching-2024-07-31" in parts
+
+
+def test_merge_anthropic_beta_empty_input():
+    from reverse_proxy import _merge_anthropic_beta
+    assert _merge_anthropic_beta("") == "oauth-2025-04-20"
+    assert _merge_anthropic_beta(None) == "oauth-2025-04-20"
+
+
 def test_oauth_not_injected_for_agent_outside_allowlist():
     from reverse_proxy import maybe_inject_anthropic_oauth
     headers = {"authorization": "Bearer client-token"}

@@ -103,6 +103,24 @@ def _anthropic_allowlist(config: dict | None) -> list:
                  .get("anthropic_agent_allowlist") or []))
 
 
+_OAUTH_BETA_FLAG = "oauth-2025-04-20"
+
+
+def _merge_anthropic_beta(existing: str, required: str = _OAUTH_BETA_FLAG) -> str:
+    """Склеить клиентский anthropic-beta с обязательным OAuth-флагом через запятую.
+
+    Anthropic принимает несколько beta-фичей одним заголовком: "a, b, c".
+    Замена клиентского значения на голое "oauth-2025-04-20" ломает Claude Code
+    CLI: он шлёт свои beta ("context-management-2025-06-27" для 1M-контекста
+    Opus 4.8, prompt-caching и т.п.) и получает 400 когда они не доходят.
+    Регрессия 2026-07-22 (ltx: OPS #b1784669156558).
+    """
+    parts = [p.strip() for p in (existing or "").split(",") if p.strip()]
+    if required and required not in parts:
+        parts.append(required)
+    return ", ".join(parts)
+
+
 def maybe_inject_anthropic_oauth(
     provider: str,
     agent_name: str | None,
@@ -112,7 +130,8 @@ def maybe_inject_anthropic_oauth(
 ) -> str:
     """Инжект Klod OAuth для anthropic-запросов от разрешённых агентов.
 
-    Мутирует fwd_headers на месте: подставляет Authorization/anthropic-beta,
+    Мутирует fwd_headers на месте: подставляет Authorization/anthropic-beta
+    (СКЛЕИВАЯ с клиентским значением через запятую, не затирая),
     вырезает клиентский x-api-key. Возвращает статус:
       "not_applicable" — не anthropic / нет agent_name
       "not_in_allowlist" — агент известен, но не в списке
@@ -127,7 +146,8 @@ def maybe_inject_anthropic_oauth(
     if not tok:
         return "no_token"
     fwd_headers["authorization"] = f"Bearer {tok}"
-    fwd_headers["anthropic-beta"] = "oauth-2025-04-20"
+    fwd_headers["anthropic-beta"] = _merge_anthropic_beta(
+        fwd_headers.get("anthropic-beta", ""))
     fwd_headers.pop("x-api-key", None)
     return "injected"
 
