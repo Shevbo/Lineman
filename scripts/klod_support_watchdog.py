@@ -39,10 +39,15 @@ HEARTBEAT_FILE = os.path.expanduser(
     os.environ.get("KLOD_DISPATCH_HEARTBEAT", "~/.klod/dispatch_heartbeat"))
 
 V1_SELFPING_TIMEOUT_S = int(os.environ.get("KLOD_WD_V1_TIMEOUT_S", "300"))  # 5 мин
-V2_AGING_THRESHOLD_S = int(os.environ.get("KLOD_WD_V2_AGING_S", "1800"))    # 30 мин
+# V2 порог = 2 часа (было 30 мин). Регрессия 2026-07-23 (Боря): «что с твоими
+# отказами???» — алерты 30мин звали Борю разобрать МОИ тикеты, читалось как
+# перевод вины. Claude Code CLI не крутится 24/7, а запускается по вызову;
+# нормальный лаг до моего появления — минуты-часы. 2ч даёт мне окно на разбор
+# без пинга. Если тикет висит 2ч+ — значит меня давно не вызывали.
+V2_AGING_THRESHOLD_S = int(os.environ.get("KLOD_WD_V2_AGING_S", "7200"))    # 2 часа
 # Верхний лимит V2: тикеты старше — уже «болото» (я их проигнорил давно, cron
 # не должен спамить Боре каждые 5 мин). Разовый триаж делается вручную, а V2
-# фокусируется на СВЕЖИХ висяках 30мин…7дней.
+# фокусируется на СВЕЖИХ висяках 2ч…7дней.
 V2_AGING_UPPER_S = int(os.environ.get("KLOD_WD_V2_UPPER_S", "604800"))       # 7 дней
 V3_HEARTBEAT_MAX_AGE_S = int(os.environ.get("KLOD_WD_V3_HB_AGE_S", "180"))  # 3 мин
 ALERT_DEDUP_S = int(os.environ.get("KLOD_WD_ALERT_DEDUP_S", "3600"))        # 1ч
