@@ -541,6 +541,9 @@
       "promptmaster",
       "shectory-portal",
       "smarthome"
+    ],
+    "gemini_full_access": [
+      "ltx"
     ]
   }
 }

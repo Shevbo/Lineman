@@ -362,7 +362,7 @@ class ProxyServer:
         # ретраили лестницу gemini-хинтов 43 минуты, каждый ретрай бил по
         # исчерпанной квоте (и по RPM). При активном cooldown отвечаем 429
         # с retry_after сразу, в Google не ходим.
-        self._klod_ask_google_block_until: float = 0.0
+        self._klod_ask_google_block_until: dict[str, float] = {}
 
         # LLM concurrency queue — prevents cascade overloads under heavy load
         llm_q = proxy_cfg.get("llm_queue", {})
@@ -2338,17 +2338,39 @@ class ProxyServer:
         else:
             provider, model_id = klod_ask.resolve_model(hint)
 
-        if provider == "google" and now < self._klod_ask_google_block_until:
-            retry_after = int(self._klod_ask_google_block_until - now) + 1
+        # Gemini gate: старшие google-модели и image-генерация — только для агентов
+        # из cfg.gemini_full_access. Остальным принудительный downgrade на flash-lite.
+        # 2026-07-23: Gemini под проект картинок LTX, экономим общую квоту.
+        _pre_provider, _pre_model = provider, model_id
+        provider, model_id = klod_ask.apply_gemini_gate(agent, provider, model_id, cfg)
+        if _pre_model != model_id:
             klod_ask.audit_log({
-                "ts": now, "agent": agent, "model": model_id, "ok": False,
-                "blocked_by": "google_cooldown", "retry_after": retry_after,
+                "ts": now, "agent": agent, "ok": True,
+                "gate": "gemini_downgrade",
+                "from_model": _pre_model, "to_model": model_id,
             })
-            return self._send_simple_and_close(wr, 429, {
-                "error": "google quota cooldown — квота Gemini исчерпана, "
-                         "возьми другой model_hint (deepseek/local) или подожди",
-                "retry_after": retry_after,
-            })
+            logger.info("klod_ask_gemini_downgrade", agent=agent,
+                        from_model=_pre_model, to_model=model_id)
+
+        # Per-model cooldown (не глобальный). Регрессия 2026-07-23: один 429 на
+        # image-модель (flash-image, у неё жёсткая RPD-квота) блокировал ВСЕ
+        # Gemini-модели для ВСЕЙ федерации на 10 мин — включая text (flash/pro)
+        # у которых квота вообще другая. Теперь блок держится только для той
+        # модели, что получила 429.
+        if provider == "google":
+            _blk = self._klod_ask_google_block_until.get(model_id, 0.0)
+            if now < _blk:
+                retry_after = int(_blk - now) + 1
+                klod_ask.audit_log({
+                    "ts": now, "agent": agent, "model": model_id, "ok": False,
+                    "blocked_by": "google_cooldown_model", "retry_after": retry_after,
+                })
+                return self._send_simple_and_close(wr, 429, {
+                    "error": f"google quota cooldown — модель {model_id} исчерпана "
+                             f"(другие Gemini-модели доступны, quota считается per-model).",
+                    "retry_after": retry_after,
+                    "model": model_id,
+                })
         path, llm_body, llm_headers = klod_ask.build_request_payload_with_ctx(
             provider, model_id, prompt, max_tokens, context_size=context_size)
 
@@ -2373,11 +2395,13 @@ class ProxyServer:
             })
             if provider == "google" and klod_ask.is_quota_error(err):
                 cooldown = float(cfg.get("google_429_cooldown_s", 600))
-                self._klod_ask_google_block_until = now + cooldown
-                logger.warning("klod_ask_google_cooldown", seconds=int(cooldown))
+                self._klod_ask_google_block_until[model_id] = now + cooldown
+                logger.warning("klod_ask_google_cooldown",
+                               model=model_id, seconds=int(cooldown))
                 return self._send_simple_and_close(wr, 429, {
-                    "error": "gemini quota exhausted",
+                    "error": f"gemini quota exhausted for model {model_id}",
                     "retry_after": int(cooldown),
+                    "model": model_id,
                 })
             return self._send_simple_and_close(
                 wr, 502, {"error": f"llm call failed: {err[:160]}"})

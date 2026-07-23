@@ -70,6 +70,32 @@ TTS_PRESETS: dict[str, tuple[str, str]] = {
 
 VALID_PROVIDERS = {"anthropic", "google", "deepseek", "lm-studio"}
 
+# 2026-07-23 Боря: «gemini сейчас берём под проект LTX (генерация картинок).
+# Доступ к старшим моделям и image-генерации — только LTX. Остальные — flash-lite.»
+# Полный доступ к любой google-модели имеют агенты из GEMINI_FULL_ACCESS (config-override
+# через klod_ask.gemini_full_access). Всем прочим — downgrade до GEMINI_DEFAULT_MODEL.
+GEMINI_DEFAULT_MODEL = "gemini-2.5-flash-lite"
+
+
+def _gemini_full_access(cfg: dict | None) -> set[str]:
+    return set(((cfg or {}).get("gemini_full_access") or []))
+
+
+def apply_gemini_gate(agent: str, provider: str, model_id: str,
+                      cfg: dict | None) -> tuple[str, str]:
+    """Понижение до gemini-2.5-flash-lite для агентов вне gemini_full_access.
+
+    Не трогает: не-google провайдеров, агентов из allowlist, запросы уже на flash-lite.
+    Возвращает (provider, model_id) — при downgrade оба поля остаются google/<lite>.
+    """
+    if provider != "google":
+        return provider, model_id
+    if agent and agent in _gemini_full_access(cfg):
+        return provider, model_id
+    if model_id == GEMINI_DEFAULT_MODEL:
+        return provider, model_id
+    return "google", GEMINI_DEFAULT_MODEL
+
 DEFAULT_BUDGET_PER_HOUR = 300
 DEFAULT_BUDGET_PER_DAY = 5000
 DEFAULT_MAX_TOKENS = 1000

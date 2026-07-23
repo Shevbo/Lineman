@@ -292,3 +292,68 @@ def test_resolve_allowed_agents_explicit_list():
     allowed = resolve_allowed_agents(cfg, None)
     assert allowed == {"only-me"}
     assert not is_agent_allowed("nurse", allowed)
+
+
+# ---------------- apply_gemini_gate ----------------
+# 2026-07-23: Gemini под LTX (генерация картинок). Все другие агенты — flash-lite.
+
+def test_gemini_gate_ltx_keeps_pro():
+    from klod_ask import apply_gemini_gate
+    cfg = {"gemini_full_access": ["ltx"]}
+    assert apply_gemini_gate("ltx", "google", "gemini-2.5-pro", cfg) == \
+        ("google", "gemini-2.5-pro")
+
+
+def test_gemini_gate_ltx_keeps_image_generation():
+    from klod_ask import apply_gemini_gate
+    cfg = {"gemini_full_access": ["ltx"]}
+    assert apply_gemini_gate("ltx", "google", "gemini-3.1-flash-image", cfg) == \
+        ("google", "gemini-3.1-flash-image")
+
+
+def test_gemini_gate_downgrades_other_agents_from_pro():
+    from klod_ask import apply_gemini_gate
+    cfg = {"gemini_full_access": ["ltx"]}
+    assert apply_gemini_gate("career-bot", "google", "gemini-2.5-pro", cfg) == \
+        ("google", "gemini-2.5-flash-lite")
+
+
+def test_gemini_gate_downgrades_other_agents_from_image():
+    from klod_ask import apply_gemini_gate
+    cfg = {"gemini_full_access": ["ltx"]}
+    assert apply_gemini_gate("eshkola", "google", "gemini-3.1-flash-image", cfg) == \
+        ("google", "gemini-2.5-flash-lite")
+
+
+def test_gemini_gate_leaves_flash_lite_alone():
+    from klod_ask import apply_gemini_gate
+    cfg = {"gemini_full_access": ["ltx"]}
+    assert apply_gemini_gate("eshkola", "google", "gemini-2.5-flash-lite", cfg) == \
+        ("google", "gemini-2.5-flash-lite")
+
+
+def test_gemini_gate_untouched_for_non_google():
+    from klod_ask import apply_gemini_gate
+    cfg = {"gemini_full_access": ["ltx"]}
+    assert apply_gemini_gate("nurse", "anthropic", "claude-opus-4-8", cfg) == \
+        ("anthropic", "claude-opus-4-8")
+    assert apply_gemini_gate("nurse", "deepseek", "deepseek-chat", cfg) == \
+        ("deepseek", "deepseek-chat")
+
+
+def test_gemini_gate_empty_allowlist_downgrades_everyone():
+    from klod_ask import apply_gemini_gate
+    assert apply_gemini_gate("ltx", "google", "gemini-2.5-pro", {}) == \
+        ("google", "gemini-2.5-flash-lite")
+    assert apply_gemini_gate("ltx", "google", "gemini-2.5-pro", None) == \
+        ("google", "gemini-2.5-flash-lite")
+
+
+def test_config_json_declares_ltx_gemini_full_access():
+    """Регрессия: ltx должен быть в gemini_full_access + extra_agents."""
+    import json as _json
+    from pathlib import Path
+    cfg = _json.loads((Path(__file__).resolve().parent.parent / "config.json").read_text())
+    ka = cfg["klod_ask"]
+    assert "ltx" in ka["gemini_full_access"]
+    assert "ltx" in ka["extra_agents"]
