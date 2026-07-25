@@ -1,6 +1,6 @@
 {
-  "generated": "2026-06-22 16:34 MSK",
-  "count": 43,
+  "generated": "2026-07-25 09:58 MSK",
+  "count": 44,
   "components": [
     {
       "id": "eshkola",
@@ -16,6 +16,28 @@
         "eshkola",
         "школ",
         "эшкол"
+      ]
+    },
+    {
+      "id": "fed-backup",
+      "type": "agent",
+      "name": "fed-backup",
+      "path": "/home/shectory/workspaces/infra/backup",
+      "git_root": "/home/shectory",
+      "own_repo": false,
+      "git_remote": null,
+      "node": "smain",
+      "desc": "",
+      "keywords": [
+        "backup",
+        "fed",
+        "fed-backup",
+        "fedbackup",
+        "restore",
+        "бэкап",
+        "восстановлен",
+        "резервн",
+        "снапшот"
       ]
     },
     {
@@ -738,24 +760,79 @@
       ]
     },
     {
-      "id": "fed-backup",
+      "id": "klod-access",
       "type": "agent",
-      "name": "FEDBACKUP",
-      "path": "/home/shectory/workspaces/infra/backup",
-      "git_root": "/home/shectory/workspaces/infra/backup",
-      "own_repo": true,
+      "name": "Klod-Access",
+      "path": "/home/shectory/klod-access",
+      "git_root": "/home/shectory",
+      "own_repo": false,
       "git_remote": null,
       "node": "smain",
-      "desc": "Резервное копирование федерации. Владеет схемой backup для всех агентов.",
+      "desc": "Хаб федерации: LLM-шлюз, диспетчер, канон онбординга. Это я.",
       "keywords": [
-        "fed-backup",
-        "fedbackup",
-        "бэкап",
-        "backup",
-        "резервн",
-        "снапшот",
-        "restore",
-        "восстановлен"
+        "klod-access",
+        "клод-доступ",
+        "клод",
+        "хаб",
+        "шлюз",
+        "диспетчер",
+        "onboarding"
+      ]
+    },
+    {
+      "id": "jobsearch-scanner",
+      "type": "agent",
+      "name": "jobsearch-scanner",
+      "path": "/home/shectory/.openclaw/agents/jobsearch-scanner",
+      "git_root": null,
+      "own_repo": false,
+      "git_remote": null,
+      "node": "smain",
+      "desc": "OpenClaw-агент поиска вакансий (шлёт кандидатов career-bot).",
+      "keywords": [
+        "jobsearch",
+        "job-scanner",
+        "scanner",
+        "hh",
+        "hh.ru",
+        "вакансии",
+        "поиск работы"
+      ]
+    },
+    {
+      "id": "shopin",
+      "type": "agent",
+      "name": "shopin",
+      "path": "~/workspaces/shopin",
+      "git_root": null,
+      "own_repo": false,
+      "git_remote": null,
+      "node": "hoster",
+      "desc": "Шопинг-агент на hoster. Path не проверен — если репо снесён, помечать deprecated.",
+      "keywords": [
+        "shopin",
+        "shopping",
+        "шопинг",
+        "покупк",
+        "корзин"
+      ]
+    },
+    {
+      "id": "main",
+      "type": "agent",
+      "name": "main (sdev=TankDev, hoster=Hoster)",
+      "path": "",
+      "git_root": null,
+      "own_repo": false,
+      "git_remote": null,
+      "node": "sdev+hoster",
+      "desc": "Namespace-конфликт: id=main на двух разных нодах — sdev это TankDev (dev-агент), hoster это Hoster (нода-агент). По коду разные, но общий id в openclaw federation.node_agents. Legacy Tank main@smain ликвидирован 2026-07-03 (см. memory tank-ликвидирован).",
+      "keywords": [
+        "main",
+        "tankdev",
+        "hoster",
+        "hoster-node",
+        "sdev-agent"
       ]
     }
   ]

@@ -343,7 +343,6 @@
   "agents": {
     "node_map": {
       "smain": [
-        "main",
         "selfcoder",
         "qaper",
         "virtual-boris",
@@ -355,7 +354,8 @@
         "interview-coach",
         "inbox",
         "klod-access",
-        "eshkola"
+        "eshkola",
+        "fed-backup"
       ]
     }
   },
