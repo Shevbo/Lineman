@@ -964,12 +964,25 @@ class ProxyServer:
         request_path: str,
         method: str,
     ) -> None:
-        """GET /api/agent/{id}/message?from=<id>&message=<msg> -- Send message to agent."""
-        # Drain headers first
+        """POST /api/agent/{id}/message?from=<id>[&message=<msg>] -- Send message to agent.
+
+        Text может быть либо в query `?message=<...>` (короткие, URL-safe),
+        либо в теле POST (для длинных news-payload'ов и markdown-блоков —
+        2026-07-25 регрессия fed-backup: news event=backup-* не влезал в URL).
+        """
+        # Читаем заголовки, чтобы узнать Content-Length (не drain'им безусловно)
+        req_headers: dict[str, str] = {}
         while True:
             hdr = await asyncio.wait_for(rd.readline(), timeout=5)
             if hdr in (b"\r\n", b"\n", b""):
                 break
+            try:
+                decoded = hdr.decode("utf-8", errors="replace").strip()
+            except Exception:
+                continue
+            if ": " in decoded:
+                k, v = decoded.split(": ", 1)
+                req_headers[k.lower()] = v
 
         parts = request_path.split("/")
         if len(parts) < 4: # Expected: /api/agent/{id}/message
@@ -990,8 +1003,29 @@ class ProxyServer:
         from_agent_id = _qs("from")
         message_text = _qs("message")
 
+        # Body-fallback: если message не в query, читаем тело.
+        # Content-Type: application/json → достаём поле "message".
+        # Иначе — весь body как plain text.
+        if not message_text:
+            try:
+                content_length = int(req_headers.get("content-length", "0") or "0")
+            except ValueError:
+                content_length = 0
+            if content_length > 0:
+                body_bytes = await asyncio.wait_for(
+                    rd.read(min(content_length, 65536)), timeout=10
+                )
+                ctype = req_headers.get("content-type", "").lower()
+                if "application/json" in ctype:
+                    try:
+                        message_text = str(json.loads(body_bytes).get("message", "") or "")
+                    except Exception:
+                        message_text = ""
+                else:
+                    message_text = body_bytes.decode("utf-8", errors="replace").strip()
+
         if not from_agent_id or not message_text:
-            self._send_json_error(wr, 400, "Missing 'from' or 'message' query parameter.")
+            self._send_json_error(wr, 400, "Missing 'from' (query) or 'message' (query or body).")
             await wr.drain()
             wr.close()
             return
