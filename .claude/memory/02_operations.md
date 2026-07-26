@@ -54,6 +54,21 @@ curl -sS http://127.0.0.1:9090/proxy/deepseek/v1/models -H "Authorization: Beare
 curl -sS -X POST "http://127.0.0.1:9090/api/tg/send" -H "Content-Type: application/json" -d '{"account":"default","chat_id":36910539,"text":"smoke"}'
 ```
 
+### account в /api/tg/send
+
+Токен резолвится в `_tg_resolve_token(account)`: сначала `openclaw.json`
+(`channels.telegram.accounts.<account>.botToken`), затем фолбэк для `klod`.
+
+| account | Бот | Источник токена |
+|---|---|---|
+| `default` | @shectory_tank_bot | openclaw.json |
+| `klod` | @ShectoryKlodBot | env `KLOD_BOT_TOKEN` (~/keymaster/.lineman-proxy.env) |
+
+`klod` в openclaw.json НЕ заводить: токен там же поллит `klod-tg-bot.service`, второй поллер
+на один токен уже ронял апрувы Ключника (инцидент 2026-07-24). Send-only через Lineman безопасен.
+Потребитель: STL на hoster (алерты вотчера торговли), env `STL_TG_ACCOUNT=klod` в
+`/home/ubuntu/.shectory_trade.env`.
+
 ## БД и retention
 
 ```bash
