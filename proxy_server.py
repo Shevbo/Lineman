@@ -1542,6 +1542,35 @@ class ProxyServer:
         )
         wr.write(body)
 
+    def _tg_resolve_token(self, account: str) -> tuple[str, bool]:
+        """Токен бота для account. Возврат: (token, config_ok).
+
+        Основной источник — openclaw.json (channels.telegram.accounts).
+        Исключение: `klod` (@ShectoryKlodBot) в openclaw.json НЕ заведён — его
+        поллит klod-tg-bot.service, токен приходит в env из
+        ~/keymaster/.lineman-proxy.env. Send-only канал для агентов федерации
+        (STL и т.п.), без дубля секрета во второй локации.
+        """
+        token = ""
+        oc_ok = True
+        try:
+            with open(self._tg_oc_path) as f:
+                oc = json.load(f)
+            token = (
+                oc.get("channels", {})
+                .get("telegram", {})
+                .get("accounts", {})
+                .get(account, {})
+                .get("botToken", "")
+            )
+        except Exception:
+            oc_ok = False
+
+        if not token and account == "klod":
+            token = (os.environ.get("KLOD_BOT_TOKEN") or "").strip()
+
+        return token, oc_ok
+
     async def _raw_api_tg_send(
         self,
         rd: asyncio.StreamReader,
@@ -1624,18 +1653,9 @@ class ProxyServer:
             return
         self._tg_msg_dedup[_dedup_key] = now
 
-        # Load token from openclaw.json
-        try:
-            with open(self._tg_oc_path) as f:
-                oc = json.load(f)
-            token = (
-                oc.get("channels", {})
-                .get("telegram", {})
-                .get("accounts", {})
-                .get(account, {})
-                .get("botToken", "")
-            )
-        except Exception:
+        token, oc_ok = self._tg_resolve_token(account)
+
+        if not token and not oc_ok:
             self._send_json_response(wr, 503, {"ok": False, "error": "config unavailable"})
             await wr.drain()
             wr.close()
