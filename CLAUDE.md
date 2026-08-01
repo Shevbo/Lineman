@@ -41,6 +41,10 @@
 | `scripts/klod_rollcall.py` | Перекличка (cron 08:30): ядро+PM2+systemd+отвеченность inbox+агенты 24ч+hoster; чинит замерших, TG-сводка Боре | нет |
 | `scripts/lazy_worker.py` + `lazy_queue.py` | Lazy Queue: локальные LLM-задачи (PM2 lazy-worker) | нет |
 | `scripts/federation_sweep.py` | cron: фоновые sweep-задачи; шлёт ТОЛЬКО если ollama-hoster жив | нет |
+| `scripts/subscription_watcher.py` | cron 0 6 UTC (09:00 MSK): следит за proxy6/iproyal/deepseek/claude-plus/gemini-plus. Manual expiry в Ключнике: `<SERVICE>_NEXT_RENEWAL=YYYY-MM-DD`. Логи `~/logs/klod/subscriptions.jsonl`. Порог 14 дней. | нет |
+| `scripts/klod_support_watchdog.py` | cron */5 под flock+timeout: 3 валидации (V1 selfping диспетчера, V2 aging OPS-тикетов от агентов, V3 heartbeat systemd+pm2). Логи `~/logs/klod/support_watchdog.jsonl`. | нет |
+| `gemini_pro.py` | pro-гейт для google: агент без гранта → база (3.5-flash) | нет |
+| `federation_registry.py`, `federation_registry.json` | реестр компонентов федерации (agents, services), 44 узла; resolve по keywords | нет |
 
 ## Экосистема Клод-Доступа (смежные сервисы, тоже твои)
 
@@ -50,7 +54,8 @@
 - Рантайм — PM2 (`pm2-shectory.service`), НЕ systemd-юнит lineman.service. `pm2 kill` = ExecStop юнита: массовый даунтайм в pm2.log с «New PM2 Daemon started» — это рестарт всего парка.
 - **openclaw.json строго валидируется**: лишний ключ в accounts роняет openclaw-gateway в крашлуп. Только известные поля. Проверка перед рестартом: `node /usr/lib/node_modules/openclaw/dist/index.js config validate`.
 - **Tank ликвидирован 2026-07-03** (агент main удалён из openclaw agents.list, TG-поллеры default/keymaster выключены). НЕ использовать `openclaw agents delete` для агентов с workspace=/home/shectory — он prune'ит workspace.
-- Отладка Lineman: `LINEMAN_DEBUG=1` (в проде логи INFO, asyncio debug выключен).
+- Отладка Lineman: `LINEMAN_DEBUG=1` (в проде логи INFO, asyncio debug выключен). structlog по default INFO — DEBUG подавляется даже когда `logger.debug(...)` есть в коде.
+- **Логи Lineman лежат в PM2**: `~/.pm2/logs/lineman-gateway-out.log` (stdout) и `~/.pm2/logs/lineman-gateway-error.log` (stderr — туда structlog по default пишет). Просмотр: `pm2 logs lineman-gateway --lines 200 --nostream`. Systemd unit `lineman.service` был давно, сейчас **inactive** — оркестратор PM2.
 
 ## Квота Gemini и /api/klod/ask
 
@@ -100,22 +105,43 @@
 ### Любая правка кода
 
 1. Прочитай существующий код целиком (не куски) — Lineman маленький, можно читать модулями
-2. Перед изменением — `pytest tests/` baseline → должен быть зелёный
-3. Правка → `pytest tests/` снова → должен остаться зелёным
+2. Перед изменением — baseline pytest → должен быть зелёный
+3. Правка → pytest снова → должен остаться зелёным
 4. Smoke-тест на живом сервисе (см. ниже)
 5. `git add -p` (целевые куски) → `git commit -m "..."` (язык русский, conventional commits)
 6. `git push` (если remote настроен)
 7. Запись в `.claude/memory/` если изменение ключевое
 8. Если поменял config.json — после restart, прогон `/health` + `/metrics`
 
+### Тесты
+
+**`.venv/bin/pytest` shebang сломан** (venv переехал с `~/workspaces/lineman/` на `~/workspaces/infra/lineman/`). Всегда через `python -m`:
+
+```bash
+# Полный прогон
+.venv/bin/python3 -m pytest tests/ -q --no-header
+
+# Один файл
+.venv/bin/python3 -m pytest tests/test_reverse_proxy.py -q
+
+# Один тест
+.venv/bin/python3 -m pytest tests/test_reverse_proxy.py::test_oauth_injected_for_allowlisted_agent -q
+```
+
+Сюита сейчас 240+ тестов, прогон ~1-2 сек.
+
 ### Перезапуск Lineman
+
+**PM2, не systemd** (systemd `lineman.service` inactive — legacy):
 
 ```bash
 # graceful
-systemctl --user restart lineman
-# верификация
-systemctl --user status lineman
-journalctl --user -u lineman -n 50 --no-pager
+pm2 restart lineman-gateway --update-env
+# состояние
+pm2 list | grep lineman
+# логи (structlog в stderr → error.log)
+pm2 logs lineman-gateway --lines 200 --nostream
+tail -f ~/.pm2/logs/lineman-gateway-error.log
 # health
 curl -s http://127.0.0.1:9090/health | jq .
 ```
@@ -183,6 +209,51 @@ Lineman читает секреты из:
 - `lineman-reviewer` — code-review с фокусом "не сломать федерацию"
 
 Используй их через Agent-tool. Не делегируй критичные правки — реви читай сам и решай сам.
+
+## Reverse-proxy middleware цепочка (важно для правок в reverse_proxy.py)
+
+`handle_reverse_proxy()` — центральный pipeline через который идёт КАЖДЫЙ POST /proxy/{provider}/*. Порядок важен, каждый шаг может отвергнуть/подменить запрос:
+
+1. `_resolve_upstream(provider, config)` — из `reverse_proxy.upstreams`. Провайдер unknown → 400.
+2. **Passthrough shortcut** для `/upload/*` (Google File API) — streaming без inspection.
+3. Read headers + body (лимит `_BODY_MAX`).
+4. `router.detect_context` + `router.resolve(BATCH)` → deepseek без tools может уйти в ollama-hoster.
+5. `_extract_agent_name` (X-Agent-Name / X-Lineman-Agent).
+6. **google gemini 3.1-pro guard** → rewrite на 2.5-pro (мусорный 250 RPD у 3.1-pro).
+7. **google pro-gate** (`gemini_pro.apply_pro_gate`) — pro-модель без гранта → 3.5-flash.
+8. **Ctx hard limit**: unnamed >80k → 429; named anthropic >500k → 429.
+9. **Circuit breaker** (8MB/call, 100 calls/60s) → 429.
+10. **Daily token cap** (общий per-provider + per-agent) → 429.
+11. **Dedup cache** (dedup_cache.py, ttl 30с) → cached response.
+12. **Tail compression** (`summarise_addendums`) — если история доминирует.
+13. **Anthropic prompt cache injection** — auto cache_control к system.
+14. **Anthropic OAuth инжект** для agent из `anthropic_agent_allowlist` (ltx-паттерн).
+15. **Google API-key drop-client + inject Lineman-only key**.
+16. **DeepSeek Bearer inject** если нет Authorization.
+17. **Proxy pool select** (pool.py: host → iproyal|proxy6, error_rate → latency → priority). Логируется `pool_selected` (INFO с 2026-08-01).
+18. `aiohttp session.request` с retry на 5xx (`_MAX_UPSTREAM_RETRIES`, backoff 1.5×).
+19. **Stream vs buffered response**: SSE → chunked pass-through с parsing usage из последнего чанка.
+20. `db.log_request(row)` в request_log.
+21. Signals.async_enqueue при huge_context / error.
+
+## Keymaster.request_value guards (не сломать!)
+
+Порядок в `keymaster.request_value(name, requester, purpose)`:
+
+- **Guard 0 (approved existing)**: если для (name, requester) уже есть `status=approved` req_id → возвращаем **тот же id** и переиздаём delivery-файл БЕЗ нового TG-approval Бори. Boris одобрил однажды — повторное согласование не требуется.
+- **Guard 1 (pending existing)**: если открытый pending для (name, requester) есть → возвращаем **тот же id**, без нового TG-пинга. Дедуп.
+- **Guard 2 (recent deny)**: если denied в течение `DENY_COOLDOWN_S` (24ч) → мгновенный `status=denied` агенту, без TG-пинга. Cooldown штрафной.
+
+Owner (`boris`) и `pre_approved` — фаст-path, guards не проходят, каждый вызов auto-approve.
+
+Регрессии, породившие эти guards, — в `~/keymaster/CLAUDE.md` (если есть) и в git history keymaster.py.
+
+## Смежные под-системы федерации (тоже под тобой)
+
+- **SMS Gateway (Private Server)** — `~/workspaces/infra/sms-gateway/`. Docker-compose (backend + MariaDB LTS), порт `127.0.0.1:3020`, TLS через nginx `sms.shectory.ru`. Заменил legacy Local Server через WG после инцидента 26-27.07 (29ч простоя). Инструкция Боре — `BORIS_SETUP.md` там же.
+- **FEDBACKUP** (agent `fed-backup@smain`, `~/workspaces/infra/backup/`) — принципиал бэкапов федерации. Онбординг-док `/home/shectory/docs/FEDERATION_AGENT_ONBOARDING.md` §15. При любом новом persistent-ресурсе агент обязан слать `POST /api/agent/fed-backup/message` с `news event=backup-new-resource|arch-change|gap ...`.
+- **Anthropic внешние агенты** (ltx-паттерн): `config.reverse_proxy.anthropic_agent_allowlist=["ltx",...]`. Внешние агенты (не в federation node_map) ходят по `ANTHROPIC_BASE_URL=http://10.66.0.1:9090/proxy/anthropic` без своего ключа — Lineman срезает клиентские креды и инжектит Klod OAuth по X-Agent-Name. Полный флоу — memory `anthropic-external-agents-allowlist.md`.
+- **Subscription watcher** — раз в сутки алертит Боре при приближении к порогу 14 дней (proxy6, iproyal, claude AI Plus, gemini AI Plus) или падении баланса (deepseek). Manual expiry дат кладёт Boris в Ключник как `<SERVICE>_NEXT_RENEWAL`.
 
 ## graphify
 
