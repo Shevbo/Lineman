@@ -116,7 +116,25 @@ class ProxyPool:
         # fallback=direct работает). api.telegram.org — геороут, прокси её не достают.
         self._cb_alert_suppress: set[str] = set(
             cb_cfg.get("alert_suppress_hosts", ["api.telegram.org"]))
-        self._last_alert: dict[tuple[str, str], float] = {}
+        # Whitelist реальных апстримов федерации — TG-алерт летит ТОЛЬКО для них.
+        # Всё остальное (сканеры/китайские IP/случайные домены через CONNECT) —
+        # лог + fallback, без шума Бориса. Пустой список = «алерт для всех» (старое
+        # поведение). Пример: ["api.anthropic.com", "*.googleapis.com",
+        # "api.openai.com", "openrouter.ai", "api.deepseek.com"].
+        self._cb_alert_allow_patterns: list[str] = list(
+            cb_cfg.get("alert_allow_hosts", [
+                "api.anthropic.com",
+                "*.googleapis.com",
+                "*.anthropic.com",
+                "api.openai.com",
+                "*.openai.com",
+                "openrouter.ai",
+                "*.openrouter.ai",
+                "api.deepseek.com",
+            ]))
+        # Кулдаун теперь на УРОВНЕ ХОСТА (а не пары proxy+host) — это рубит
+        # двойной алерт «iproyal+host» и «proxy6+host» в одном окне.
+        self._last_alert: dict[str, float] = {}
 
         for proxy in pool_config.get("proxies", []):
             pid = proxy["id"]
@@ -173,7 +191,10 @@ class ProxyPool:
 
         best = min(candidates, key=self._score)
         url = self._proxies[best]["url"]
-        logger.debug("pool_selected", host=host, proxy=best)
+        # INFO уровень (было debug): для аналитики usage iproyal vs proxy6.
+        # Регрессия 2026-07-28 (Боря: «нужен ли федерации iProyal?») — без
+        # этого лога невозможно сказать сколько трафика реально через каждый.
+        logger.info("pool_selected", host=host, proxy=best)
         return url, best
 
     def record(
@@ -286,17 +307,30 @@ class ProxyPool:
         return circuit is not None and circuit.tripped_at > 0
 
     def _is_alert_suppressed(self, host: str) -> bool:
-        """Хосты, по которым не шлём TG-алерт о срыве циркуита (хронический шум)."""
-        return host in self._cb_alert_suppress
+        """Шлём TG-алерт ТОЛЬКО для известных федерации апстримов.
+
+        Логика: (1) явный suppress-set всегда душит (даже если в allow),
+        (2) если allowlist непустой — host должен матчить хотя бы один паттерн.
+        Остальное (сканеры, внешние CONNECT, карьерные краулеры) — лог + fallback
+        без шума Бори. До правки 2026-06-18 был обратный фильтр (только blacklist)
+        — спамил по 20-30 сообщений в день."""
+        if host in self._cb_alert_suppress:
+            return True
+        if self._cb_alert_allow_patterns and not any(
+            fnmatch(host, pat) for pat in self._cb_alert_allow_patterns
+        ):
+            return True
+        return False
 
     async def _alert_tripped(self, proxy_id: str, host: str, error_count: int) -> None:
         if self._is_alert_suppressed(host):
             return  # лог host_circuit_tripped уже записан; в ТГ не спамим
-        key = (proxy_id, host)
+        # Кулдаун ПО ХОСТУ (а не пара): если iproyal уже отстрелил алерт по host'у,
+        # proxy6 в том же окне молчит.
         now = time.monotonic()
-        if now - self._last_alert.get(key, 0.0) < self._cb_alert_cooldown:
+        if now - self._last_alert.get(host, 0.0) < self._cb_alert_cooldown:
             return
-        self._last_alert[key] = now
+        self._last_alert[host] = now
 
         text = (
             f"[LINEMAN] Proxy circuit breaker tripped\n"
