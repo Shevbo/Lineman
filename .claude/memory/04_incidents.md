@@ -1,5 +1,35 @@
 # Журнал инцидентов Lineman
 
+## 2026-08-05 — Cutover SMS-шлюза с WG на LAN direct (2+ дня простоя из-за orphan-архитектуры)
+
+**Симптом:** `stl-morning-sms.sh` в cron даёт `http=000` (01.08 обе, 03.08 обе). Пользователь: «два дня не работает, бэкап не сработал». Внешний watchdog молчит.
+
+**Root cause (в три слоя):**
+1. **Cutover 28.07 на Private Server не был доведён**: `docker-compose up` подняли, но nginx-сайта `sms.shectory.ru` не поставили (нет в `sites-enabled`), DNS-A-записи нет, в БД шлюза 0 users/devices/messages. Наш backend вхолостую крутился 8 дней. Реальный URL в keymaster остался `http://10.66.0.9:8080` (legacy WG Local Server).
+2. **Android SMS Gateway app отвязался от WG-интерфейса**: WG-пир `garden@10.66.0.9` жив (handshake каждые 25с), но порт 8080 в WG-tunnel закрыт. Значит все `http=202 Pending` после 28.07 приходили не к нам — вероятно WG иногда просыпался, чаще нет.
+3. **«Бэкап» = не второй канал доставки SMS, а Telegram-алерт о недоставке** (`stl-*.sh:send_tg`). ТГ работал, но Боря ждал реального SMS. `stl-watchdog.sh` строк 37-46 проверял здоровье шлюза через `wg show wg0 dump` по хостнейму — с 28.07 путь не WG, метрика мёртвая, алерт никогда не срабатывал.
+
+Дополнительно: docker healthcheck backend'а падал 56 часов подряд (`wget localhost:3000` → IPv6 refused; сервис слушает 0.0.0.0 v4). False-unhealthy шум, никто не смотрел.
+
+**Что переделали (LAN direct via shevbo-pi):**
+- Телефон физически в LAN Пи, IP `192.168.1.128`, ethernet-подключение 100Мбит. Приложение переведено в **Local Server mode**, foreground service + battery unrestricted (без этого Android усыплял процесс).
+- Keymaster: `smsgateway_local_server` = `192.168.1.128:8080`, `smsgateway_username=sms`, `smsgateway_password` обновлён Борей.
+- Новая либа `~/bin/send-sms.sh`: POST `/message` через `ssh -J shevbo-pi ...` → поллит `state` до `Delivered` (POLL_TIMEOUT=90с) → аудит в `~/logs/sms/audit.jsonl`. Exit 0/1/2 (Delivered/failed/timeout).
+- `~/bin/stl-morning-sms.sh` и `~/bin/stl-watchdog.sh` переведены на send-sms.sh. Убран мёртвый WG-probe (`wg show wg0`). TG-алерт сохранён как ВТОРОЙ канал уведомления (не подмена).
+- Новый `~/bin/sms-gateway-doctor.sh` + cron `*/5 * * * *`: пробит `/health`, интерпретирует `status`/`connection:status`/`messages:failed`/`battery.level`, проверяет Basic Auth (400 vs 401). Алерты в ТГ с дедупом 30 мин. `connection:cellular` НЕ алертит (это тип моб.данных, не индикатор GSM-канала). Auto-canary НЕ шлём (`stl-*.sh` уже валидируют путь фактическими SMS).
+
+**Проверка (2026-08-05 09:14-09:17 MSK):** 3 канарейки подряд (прямой POST, через send-sms.sh, через WATCHDOG_TEST=1 stl-watchdog.sh) → `state=Delivered` в 5с, Боря подтвердил приём.
+
+**Orphan Private Server** (`~/workspaces/infra/sms-gateway/`): решение — застопить `docker-compose down` (без -v), volume 162MB оставить на диске для потенциального phase A («Private Server + FCM для случая когда телефон унесут из LAN»). Пока не решено — согласовать с Борей.
+
+**Что зависит от Бори:** DHCP-резервация на роутере (`192.168.1.128` → MAC ethernet-адаптера телефона). Без этого IP может уплыть после reboot роутера, вся цепочка отвалится.
+
+**Уроки:**
+1. **Cutover ≠ deploy**: подняли compose ≠ мигрировали. Всегда чек-лист: (a) обновить URL в consumers, (b) первую реальную транзакцию через новый путь пройти, (c) удалить старый путь.
+2. **HTTP-2xx ≠ Delivered**: у любого SMS-шлюза state=Sent/Delivered — единственный правильный сигнал. Скрипты которые верят в `http=202` = ложная уверенность.
+3. **Android background = смерть**: любая background-app без foreground-service и battery-unrestricted будет засыпать. Проверять это ДО ввода в критичный путь.
+4. **Health-checks должны быть end-to-end**: docker-healthcheck внутри контейнера — мониторинг игрушечный. Реальный health = «прошёл ли последний бизнес-transaction».
+
 ## 2026-07-20 — Anthropic-совместимый шлюз для внешних агентов (ltx-паттерн)
 
 **Запрос:** ltx (агент на vs-code-local / i9, Windows/CDP) через klod-access inbox: Claude Code CLI ходит в LLM только по Anthropic Messages API (`ANTHROPIC_BASE_URL` + OAuth), `/api/klod/ask` (prompt→text) для этого не годится, прямой `/proxy/anthropic` был закрыт нормой канона.
