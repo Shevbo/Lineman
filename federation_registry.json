@@ -1,6 +1,6 @@
 {
   "generated": "2026-07-25 09:58 MSK",
-  "count": 44,
+  "count": 49,
   "components": [
     {
       "id": "eshkola",
@@ -833,6 +833,24 @@
         "hoster",
         "hoster-node",
         "sdev-agent"
+      ]
+    },
+    {
+      "id": "sms-gateway",
+      "type": "service",
+      "name": "SMS Gateway (garden-phone)",
+      "path": "/home/shectory/bin/send-sms.sh",
+      "own_repo": false,
+      "node": "smain",
+      "desc": "Android-шлюз в LAN shevbo-pi (192.168.1.128:8080, Local Server mode). Единый канал критичных SMS-алертов Боре и OTP. Использовать через ~/bin/send-sms.sh (POST + poll state=Delivered). Приоритет consumers: stl (migrated 2026-08-05), garden-manager-app (pending).",
+      "keywords": [
+        "sms",
+        "gateway",
+        "garden",
+        "stl",
+        "alert",
+        "otp",
+        "send-sms"
       ]
     }
   ]
