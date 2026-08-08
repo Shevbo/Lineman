@@ -547,6 +547,10 @@ class ProxyServer:
                 await self._raw_api_tg_send(rd, wr)
                 return
 
+            elif request_path_only == "/api/sms/message" and method == "POST":
+                await self._raw_api_sms_send(rd, wr, source_ip)
+                return
+
             # klod-access two-way inbox (specialised: file-backed, no openclaw cli)
             elif request_path_only.startswith("/api/agent/klod-access/"):
                 await self._raw_api_klod_access(rd, wr, request_path, method)
@@ -1858,6 +1862,153 @@ class ProxyServer:
         cwd = body.get("cwd")
         result = self._rtk.exec(command, cwd)
         return web.json_response(result)
+
+    # --- SMS gateway proxy (raw TCP handler) ---
+
+    @staticmethod
+    def _sms_parse_body(body_bytes: bytes) -> tuple[str, list[str], str | None]:
+        """Возвращает (text, phones, error). error=None если ok.
+        Принимает {message,phoneNumbers:[...]} (SMS Gateway контракт garden-app)
+        или короткую {message,phone:"..."} форму."""
+        try:
+            req = json.loads(body_bytes)
+        except json.JSONDecodeError:
+            return "", [], "invalid JSON"
+        if not isinstance(req, dict):
+            return "", [], "invalid JSON"
+        text = req.get("message") or req.get("text") or ""
+        phones = req.get("phoneNumbers") or []
+        if not phones and req.get("phone"):
+            phones = [req["phone"]]
+        if not isinstance(phones, list):
+            return "", [], "phoneNumbers must be array"
+        if not text or not phones:
+            return "", [], "message and phone(s) required"
+        return text, phones, None
+
+    @staticmethod
+    def _sms_extract_agent(headers: dict[str, str]) -> str:
+        """Agent id: X-Agent-Name → X-Lineman-Agent → Basic Auth username → 'unknown'."""
+        agent = headers.get("x-agent-name") or headers.get("x-lineman-agent") or ""
+        if agent:
+            return agent
+        authz = headers.get("authorization", "")
+        if authz.lower().startswith("basic "):
+            try:
+                decoded = base64.b64decode(authz.split(" ", 1)[1]).decode("utf-8", "replace")
+                return decoded.split(":", 1)[0] or "unknown"
+            except Exception:
+                return "unknown"
+        return "unknown"
+
+    async def _raw_api_sms_send(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        source_ip: str,
+    ) -> None:
+        """POST /api/sms/message — федеративный wrapper над ~/bin/send-sms.sh.
+
+        Позволяет любому агенту (после IP-allowlist на /api/*) слать SMS через
+        LAN-шлюз в LAN Пи, не зная про ssh-jump / Basic Auth / poll state=Delivered.
+
+        Body (принимает две формы для совместимости):
+          {"message": "text", "phoneNumbers": ["+7..."]}   — контракт SMS Gateway app,
+                                                             garden-manager-app уже шлёт так.
+          {"message": "text", "phone": "+7..."}            — короткая форма.
+
+        Auth: X-Agent-Name header (для audit), либо Basic Auth username (игнорируется
+        содержимое, но source-of-agent-name). /api/* уже за IP-allowlist'ом.
+
+        Response (mirror SMS Gateway app shape):
+          200 {"ok": true, "id": "...", "state": "Delivered",
+               "recipients": [{"phoneNumber": "+7...", "state": "Delivered"}]}
+          400 {"ok": false, "error": "..."}
+          502 {"ok": false, "error": "send-sms.sh failed", "rc": N, "stderr": "..."}
+          504 {"ok": false, "error": "timeout waiting for delivery"}
+        """
+        headers: dict[str, str] = {}
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+            decoded = hdr.decode("utf-8", errors="replace").strip()
+            if ": " in decoded:
+                k, v = decoded.split(": ", 1)
+                headers[k.lower()] = v
+
+        try:
+            content_length = int(headers.get("content-length", "0") or "0")
+        except ValueError:
+            content_length = 0
+        body_bytes = b""
+        if content_length > 0:
+            body_bytes = await asyncio.wait_for(
+                rd.read(min(content_length, 32768)), timeout=10
+            )
+
+        text, phones, err = self._sms_parse_body(body_bytes)
+        if err:
+            self._send_json_response(wr, 400, {"ok": False, "error": err})
+            await wr.drain(); wr.close(); return
+
+        agent = self._sms_extract_agent(headers)
+        results: list[dict] = []
+        overall_ok = True
+        first_id = ""; first_state = ""
+        for phone in phones:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "/home/shectory/bin/send-sms.sh", phone, text,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    results.append({"phoneNumber": phone, "state": "Failed",
+                                    "error": "wrapper timeout 120s"})
+                    overall_ok = False
+                    continue
+            except FileNotFoundError:
+                self._send_json_response(
+                    wr, 500, {"ok": False, "error": "send-sms.sh not found on smain"}
+                )
+                await wr.drain(); wr.close(); return
+
+            rc = proc.returncode or 0
+            out_str = (out or b"").decode("utf-8", errors="replace").strip()
+            err_str = (err or b"").decode("utf-8", errors="replace").strip()
+            # last line of stdout: "<ts> ok state=Delivered id=..." или "<ts> fail http=... state=..."
+            last = out_str.splitlines()[-1] if out_str else ""
+            state = "Delivered" if rc == 0 else ("Timeout" if rc == 2 else "Failed")
+            sms_id = ""
+            for token in last.split():
+                if token.startswith("id="):
+                    sms_id = token[3:]
+                elif token.startswith("state="):
+                    st = token[6:]
+                    if st:
+                        state = st
+            if not first_id:
+                first_id = sms_id
+                first_state = state
+            entry = {"phoneNumber": phone, "state": state}
+            if rc != 0:
+                overall_ok = False
+                entry["error"] = err_str[:200] or last[:200] or f"rc={rc}"
+            results.append(entry)
+
+        logger.info(
+            "sms_send",
+            agent=agent, phones=len(phones), ok=overall_ok,
+            state=first_state, source_ip=source_ip,
+        )
+        status_code = 200 if overall_ok else (504 if any(r.get("state") == "Timeout" for r in results) else 502)
+        resp = {"ok": overall_ok, "id": first_id, "state": first_state, "recipients": results}
+        self._send_json_response(wr, status_code, resp)
+        await wr.drain(); wr.close()
 
     # --- Signal & Dashboard API (raw TCP helpers) ---
 
