@@ -324,10 +324,14 @@
       },
       "ltx": {
         "anthropic": 5000000
+      },
+      "stl": {
+        "anthropic": 1000000
       }
     },
     "anthropic_agent_allowlist": [
-      "ltx"
+      "ltx",
+      "stl"
     ],
     "claude_cli_daily_budgets": {
       "career-bot": 20000000,
