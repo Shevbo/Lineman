@@ -35,6 +35,44 @@ _HUGE_CTX_COOLDOWN_S = 1800.0
 _UNNAMED_CTX_BLOCKED_HOSTS = frozenset({"smain", "hoster", "cloud"})
 
 
+def _split_proxy_auth(url: str | None) -> tuple[str | None, "aiohttp.BasicAuth | None"]:
+    """Разделить http://user:pass@host:port на (url_без_auth, BasicAuth(user, pw)).
+
+    Причина (fed-backup msg 24302, 2026-08-11): aiohttp при ошибках/ретраях
+    прокидывает proxy URL в текст исключения. Если auth лежит В URL — пароль
+    утекает в traceback → pm2-stderr → log-diggers. Правильное API aiohttp:
+    proxy=<url без auth>, proxy_auth=aiohttp.BasicAuth(user, pw) — auth уходит
+    в отдельный заголовок Proxy-Authorization, никогда не в exception text.
+
+    URL без auth возвращается как есть, BasicAuth=None.
+    URL с auth → (scheme://host:port/path, BasicAuth(user, pw)).
+    None → (None, None) (без прокси).
+    """
+    if not url:
+        return url, None
+    # Найти "://" и "@" ПЕРЕД первым "/" после схемы
+    scheme_sep = url.find("://")
+    if scheme_sep < 0:
+        return url, None
+    scheme = url[:scheme_sep + 3]
+    rest = url[scheme_sep + 3:]
+    # "user:pass@host:port/path" — split first "@" перед первым "/"
+    path_sep = rest.find("/")
+    userinfo_part = rest if path_sep < 0 else rest[:path_sep]
+    tail = "" if path_sep < 0 else rest[path_sep:]
+    at_idx = userinfo_part.find("@")
+    if at_idx < 0:
+        return url, None
+    userinfo = userinfo_part[:at_idx]
+    host_port = userinfo_part[at_idx + 1:]
+    if ":" in userinfo:
+        user, pw = userinfo.split(":", 1)
+    else:
+        user, pw = userinfo, ""
+    from urllib.parse import unquote
+    return f"{scheme}{host_port}{tail}", aiohttp.BasicAuth(unquote(user), unquote(pw))
+
+
 def _extract_agent_name(headers: dict[str, str]) -> str | None:
     """Return X-Agent-Name header value, or None."""
     return headers.get("x-agent-name") or headers.get("x-lineman-agent") or None
@@ -170,7 +208,7 @@ async def _call_summarizer(
     if not api_key:
         return None
 
-    proxy_url = os.environ.get("LINEMAN_IPROYAL_URL", "") or None
+    proxy_url = os.environ.get("LINEMAN_PROXY6_URL", "") or os.environ.get("LINEMAN_IPROYAL_URL", "") or None
 
     payload = {
         "model": "deepseek-chat",
@@ -189,7 +227,11 @@ async def _call_summarizer(
             timeout=aiohttp.ClientTimeout(total=8.0),
         )
         if proxy_url:
-            kwargs["proxy"] = proxy_url
+            # basic-auth → отдельный заголовок, не в URL (см. _split_proxy_auth)
+            p_url, p_auth = _split_proxy_auth(proxy_url)
+            kwargs["proxy"] = p_url
+            if p_auth is not None:
+                kwargs["proxy_auth"] = p_auth
         async with aiohttp.ClientSession() as sess:
             async with sess.post(
                 "https://api.deepseek.com/v1/chat/completions", **kwargs
@@ -513,7 +555,11 @@ async def _handle_passthrough(
         timeout=aiohttp.ClientTimeout(total=600),
     )
     if use_proxy:
-        req_kwargs["proxy"] = use_proxy
+        # basic-auth → отдельный proxy_auth (не в URL, чтобы не утечь в exception)
+        _pu, _pa = _split_proxy_auth(use_proxy)
+        req_kwargs["proxy"] = _pu
+        if _pa is not None:
+            req_kwargs["proxy_auth"] = _pa
 
     try:
         async with session.request(**req_kwargs) as resp:
@@ -968,7 +1014,11 @@ async def handle_reverse_proxy(
         timeout=aiohttp.ClientTimeout(total=_STREAM_TIMEOUT),
     )
     if use_proxy:
-        req_kwargs["proxy"] = use_proxy
+        # basic-auth → отдельный proxy_auth (не в URL, чтобы не утечь в exception)
+        _pu, _pa = _split_proxy_auth(use_proxy)
+        req_kwargs["proxy"] = _pu
+        if _pa is not None:
+            req_kwargs["proxy_auth"] = _pa
 
     for _attempt in range(_MAX_UPSTREAM_RETRIES + 1):
         _final = (_attempt == _MAX_UPSTREAM_RETRIES)
