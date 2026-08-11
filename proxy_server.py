@@ -1287,6 +1287,9 @@ class ProxyServer:
                 since = int(q("since", "0") or "0")
                 limit = min(int(q("limit", "50") or "50"), 500)
                 to = q("to") or None
+                # read-receipt: агент пришёл с курсором → всё до since он забрал
+                if to:
+                    klod_inbox.record_pull(to, since)
                 msgs = klod_inbox.read_outbox(since, limit, to=to)
                 return self._send_simple_and_close(wr, 200, {"messages": msgs})
 

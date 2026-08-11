@@ -18,6 +18,8 @@ def isolated_klod_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(klod_inbox, "OUTBOX_FILE", tmp_path / "outbox.jsonl")
     monkeypatch.setattr(klod_inbox, "COUNTER_FILE", tmp_path / "counter.txt")
     monkeypatch.setattr(klod_inbox, "PUSH_URLS_FILE", tmp_path / "push_urls.json")
+    monkeypatch.setattr(klod_inbox, "DELIVERY_STATUS_FILE", tmp_path / "outbox_delivery.jsonl")
+    monkeypatch.setattr(klod_inbox, "PULL_CURSORS_FILE", tmp_path / "pull_cursors.json")
     return tmp_path
 
 
@@ -82,13 +84,21 @@ def test_deliver_reply_pushes_when_registered(isolated_klod_dir):
     session.get.assert_not_called()
 
 
-def test_deliver_reply_falls_back_when_no_push_url(isolated_klod_dir):
-    # No push_url for this agent → must use legacy GET fallback
+def test_no_push_url_means_pull_no_legacy_forward(isolated_klod_dir):
+    """Без push_url доставка = pull из outbox.
+
+    Legacy-forward в /api/agent/<to>/message снят 2026-08-11: после routing fix
+    тот эндпоинт для from=klod-access пишет в ЭТОТ ЖЕ outbox, то есть forward
+    плодил фантомный дубль на каждый reply (наблюдалось на id 24363→24364).
+    """
     session = _mk_session(get_status=200)
-    ok, err = asyncio.run(klod_inbox.deliver_reply("nobody", "hi", session=session))
-    assert ok is True and err is None
-    session.get.assert_called_once()
+    ok, err = asyncio.run(klod_inbox.deliver_reply(
+        "nobody", "hi", session=session, record_id=5))
+    assert ok is False and err is None      # не «ошибка», а «ждёт pull»
+    session.get.assert_not_called()
     session.post.assert_not_called()
+    # и в журнал доставки ничего не пишем — исхода ещё нет
+    assert klod_inbox.load_delivery_status() == {}
 
 
 def test_deliver_reply_push_4xx_returns_error(isolated_klod_dir):

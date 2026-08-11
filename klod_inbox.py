@@ -40,6 +40,13 @@ INBOX_FILE = INBOX_DIR / "inbox.jsonl"
 OUTBOX_FILE = INBOX_DIR / "outbox.jsonl"
 COUNTER_FILE = INBOX_DIR / "counter.txt"
 PUSH_URLS_FILE = INBOX_DIR / "push_urls.json"
+# Исход доставки каждой outbox-записи. Отдельный append-only файл, потому что
+# outbox.jsonl тоже append-only и переписывать строку в нём небезопасно
+# (конкурентные аппенды). Последняя запись по ref выигрывает.
+DELIVERY_STATUS_FILE = INBOX_DIR / "outbox_delivery.jsonl"
+# agent_id → максимальный since, с которым агент забирал свой outbox.
+# Это read-receipt для pull-режима: всё до курсора адресат гарантированно видел.
+PULL_CURSORS_FILE = INBOX_DIR / "pull_cursors.json"
 
 _PUSH_URL_RE = re.compile(r"^https?://[A-Za-z0-9._:\-]+(/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*)?$")
 
@@ -186,9 +193,80 @@ def write_outbox(to_agent: str, message: str, in_reply_to: int | None = None,
     return rec
 
 
+def record_delivery(ref_id: int, delivered: bool, delivery_error: str | None = None,
+                    via: str | None = None) -> None:
+    """Зафиксировать исход доставки outbox-записи ref_id. Best-effort: журнал
+    доставки не должен ронять саму доставку."""
+    try:
+        _ensure_dir()
+        _append_line(DELIVERY_STATUS_FILE, {
+            "ref": int(ref_id),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "delivered": bool(delivered),
+            "delivery_error": delivery_error,
+            "via": via,
+        })
+    except Exception:
+        logger.exception("record_delivery_failed", ref=ref_id)
+
+
+def load_delivery_status() -> dict[int, dict[str, Any]]:
+    """ref_id → последний известный исход доставки."""
+    if not DELIVERY_STATUS_FILE.exists():
+        return {}
+    out: dict[int, dict[str, Any]] = {}
+    try:
+        with DELIVERY_STATUS_FILE.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                    ref = int(d["ref"])
+                except Exception:
+                    continue
+                out[ref] = d
+    except Exception:
+        logger.exception("load_delivery_status_failed")
+    return out
+
+
+def record_pull(agent: str, since: int) -> None:
+    """Курсор адресата = read-receipt для pull-режима. Агент, пришедший за
+    ответами с since=N, тем самым подтвердил, что всё до N включительно он
+    забрал. Храним максимум по агенту, атомарная запись."""
+    if not agent or since <= 0:
+        return
+    try:
+        cur = load_pull_cursors()
+        if int(cur.get(agent, 0)) >= int(since):
+            return
+        cur[agent] = int(since)
+        _ensure_dir()
+        tmp = PULL_CURSORS_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(PULL_CURSORS_FILE)
+    except Exception:
+        logger.exception("record_pull_failed", agent=agent)
+
+
+def load_pull_cursors() -> dict[str, int]:
+    if not PULL_CURSORS_FILE.exists():
+        return {}
+    try:
+        data = json.loads(PULL_CURSORS_FILE.read_text(encoding="utf-8"))
+        return {k: int(v) for k, v in data.items() if isinstance(k, str)}
+    except Exception:
+        return {}
+
+
 def read_outbox(since: int = 0, limit: int = 50, to: str | None = None) -> list[dict[str, Any]]:
     """Pull-модель reply-доставки: агент тянет свои ответы через to=<его id> + курсор since.
-    Без to — весь outbox (как раньше)."""
+    Без to — весь outbox (как раньше).
+
+    delivered/delivery_error накладываются из журнала доставки: сама запись
+    пишется до попытки push, исход известен позже."""
     if not OUTBOX_FILE.exists():
         return []
     out: list[dict[str, Any]] = []
@@ -206,7 +284,26 @@ def read_outbox(since: int = 0, limit: int = 50, to: str | None = None) -> list[
             if to is not None and d.get("to") != to:
                 continue
             out.append(d)
-    return out[-limit:]
+    out = out[-limit:]
+    if out:
+        status = load_delivery_status()
+        cursors = load_pull_cursors()
+        for d in out:
+            rid = d.get("id", 0)
+            st = status.get(rid)
+            if st is not None:
+                d["delivered"] = st.get("delivered")
+                d["delivery_error"] = st.get("delivery_error")
+                if st.get("via"):
+                    d["delivery_via"] = st["via"]
+                if st.get("ts"):
+                    d["delivered_at"] = st["ts"]
+                continue
+            # Push не применялся → доставку подтверждает курсор адресата.
+            if rid and rid <= int(cursors.get(d.get("to") or "", 0)):
+                d["delivered"] = True
+                d["delivery_via"] = "pull"
+    return out
 
 
 def load_push_urls() -> dict[str, str]:
@@ -249,8 +346,10 @@ async def deliver_reply(to_agent: str, message: str,
     own_session = session is None
     if session is None:
         session = aiohttp.ClientSession()
+    ok, err, via = False, "not attempted", None
     try:
         if push_url:
+            via = "push"
             payload = {
                 "from": "klod-access",
                 "to": to_agent,
@@ -266,19 +365,23 @@ async def deliver_reply(to_agent: str, message: str,
                     headers={"X-Klod-Channel": "push"},
                 ) as resp:
                     ok = 200 <= resp.status < 300
-                    return ok, None if ok else f"push HTTP {resp.status}"
+                    err = None if ok else f"push HTTP {resp.status}"
             except Exception as e:
-                return False, f"push exc: {e}"
-        # Fallback: legacy in-Lineman forward
-        from urllib.parse import urlencode
-        qs = urlencode({"from": "klod-access", "message": message})
-        url = f"http://127.0.0.1:9090/api/agent/{to_agent}/message?{qs}"
-        try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                ok = 200 <= resp.status < 300
-                return ok, None if ok else f"fwd HTTP {resp.status}"
-        except Exception as e:
-            return False, f"fwd exc: {e}"
+                ok, err = False, f"push exc: {e}"
+            return ok, err
+        # Без push_url доставка = pull из outbox. Legacy-forward в
+        # /api/agent/<to>/message здесь БОЛЬШЕ НЕ ДЕЛАЕТСЯ: после routing fix
+        # 2026-08-11 тот эндпоинт для from=klod-access сам пишет в этот же
+        # outbox, то есть forward плодил фантомный дубль на каждый reply.
+        # delivered остаётся None (ждёт pull), пока адресат не сдвинет курсор.
+        via = "outbox-pull"
+        return False, None
     finally:
+        # Исход доставки обязан осесть в журнале: reply пишется в outbox ДО
+        # попытки, и без этого отправитель навсегда видит delivered=null.
+        # Для pull-режима исхода нет (никто ничего не пробовал) — статус даст
+        # курсор адресата, см. record_pull().
+        if record_id is not None and via != "outbox-pull":
+            record_delivery(record_id, ok, err, via)
         if own_session:
             await session.close()
