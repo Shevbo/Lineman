@@ -2,6 +2,58 @@
 from secret_mask import mask_row, mask_secrets
 
 
+# --- URL basic-auth (регрессия 2026-08-11, fed-backup msg 24302) ---
+# aiohttp прокидывал http://LOGIN:PASSWORD@proxy в тексте исключений;
+# /api/klod/ask отдавал в теле ответа наружу. Инвариант: пароль всегда REDACTED,
+# логин остаётся видимым (диагностика — чей ключ утёк, для оперативной ротации).
+
+def test_http_basic_auth_url_masked():
+    s = 'url=http://tfCvF1:97QsVP@45.85.162.25:8000'
+    out = mask_secrets(s)
+    assert "97QsVP" not in out, "пароль не должен утекать"
+    assert "tfCvF1" in out, "логин должен остаться (диагностика)"
+    assert "***REDACTED***" in out
+
+
+def test_socks5_basic_auth_url_masked():
+    s = 'proxy socks5://user:hunter2@10.66.0.9:1080/socks'
+    out = mask_secrets(s)
+    assert "hunter2" not in out
+    assert "socks5://user:" in out
+
+
+def test_ftp_basic_auth_url_masked():
+    s = 'ftp://boris:sekrit@ftp.shectory.ru:21/dir'
+    out = mask_secrets(s)
+    assert "sekrit" not in out
+    assert "ftp://boris:" in out
+
+
+def test_https_no_auth_url_unchanged():
+    """Обычный URL без auth не должен вообще меняться."""
+    s = 'GET https://api.anthropic.com/v1/messages HTTP/1.1'
+    assert mask_secrets(s) == s
+
+
+def test_url_auth_in_error_json():
+    """Точный случай из fed-backup msg 24302 (упс с /api/klod/ask)."""
+    s = ('{"error": "llm call failed: upstream HTTP 502: '
+         '{\\"error\\": \\"Upstream error: 407, url='
+         'http://tfCvF1:97QsVP@45.85.162.25:8000\\"}"}')
+    out = mask_secrets(s)
+    assert "97QsVP" not in out
+    assert "tfCvF1:***REDACTED***@" in out
+
+
+def test_url_auth_preserves_rest_of_string():
+    """Только пароль в URL должен меняться, остальной текст — нет."""
+    s = 'before url=https://user:s3cret@host.com/path?q=1 after text'
+    out = mask_secrets(s)
+    assert "s3cret" not in out
+    assert "before " in out and " after text" in out
+    assert "user:***REDACTED***@host.com/path?q=1" in out
+
+
 def test_json_api_key():
     s = '{"api_key":"AIzaSyB-fake-very-long-google-key-value-12345"}'
     out = mask_secrets(s)

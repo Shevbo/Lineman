@@ -2637,10 +2637,16 @@ class ProxyServer:
                 path, llm_body, llm_headers, provider)
         except Exception as e:
             err = str(e)
-            logger.warning("klod_ask_llm_failed", agent=agent, err=err[:160])
+            # ВАЖНО: маскируем ДО логирования и записи в audit. Регрессия
+            # 2026-08-11 (fed-backup msg 24302): raw upstream error содержал
+            # http://LOGIN:PASSWORD@proxy_host — уходило в аудит и в тело
+            # ответа наружу. Секреты в ответах API — hard-nope.
+            from secret_mask import mask_secrets as _mask_str
+            safe_err = _mask_str(err) or ""
+            logger.warning("klod_ask_llm_failed", agent=agent, err=safe_err[:160])
             klod_ask.audit_log({
                 "ts": now, "agent": agent, "model": model_id, "ok": False,
-                "error": err[:200],
+                "error": safe_err[:200],
             })
             if provider == "google" and klod_ask.is_quota_error(err):
                 cooldown = float(cfg.get("google_429_cooldown_s", 600))
@@ -2653,7 +2659,7 @@ class ProxyServer:
                     "model": model_id,
                 })
             return self._send_simple_and_close(
-                wr, 502, {"error": f"llm call failed: {err[:160]}"})
+                wr, 502, {"error": f"llm call failed: {safe_err[:160]}"})
 
         # Запись бюджета только при успехе — failed-вызовы не съедают квоту.
         self._klod_ask_recent.append((now, agent))
@@ -2704,6 +2710,11 @@ class ProxyServer:
         # aiohttp при json=body сам выставит Content-Type — наш дубль убираем.
         clean_headers = {k: v for k, v in headers.items()
                          if k.lower() != "content-type"}
+        # Defense-in-depth: маскируем ЛЮБУЮ строку из upstream перед созданием
+        # RuntimeError. Иначе proxy URL с basic-auth (http://LOGIN:PASSWORD@host)
+        # из aiohttp exception попадает в traceback → pm2 stderr → диспатчер
+        # + чей-то stdout. Регрессия 2026-08-11.
+        from secret_mask import mask_secrets as _mask
         try:
             async with self._upstream_session.post(
                 url, json=body, headers=clean_headers,
@@ -2712,20 +2723,22 @@ class ProxyServer:
                 raw = await resp.read()
                 elapsed_ms = (time.monotonic() - t0) * 1000.0
                 if resp.status != 200:
-                    raise RuntimeError(
-                        f"upstream HTTP {resp.status}: {raw[:200].decode('utf-8','replace')}")
+                    safe = _mask(raw[:200].decode("utf-8", "replace")) or ""
+                    raise RuntimeError(f"upstream HTTP {resp.status}: {safe}")
                 try:
                     data = json.loads(raw or b"{}")
                 except Exception as e:
-                    raise RuntimeError(
-                        f"upstream non-JSON response: {str(e)} body={raw[:120]!r}")
+                    safe = _mask(repr(raw[:120])) or ""
+                    raise RuntimeError(f"upstream non-JSON response: {str(e)} body={safe}")
         except asyncio.TimeoutError:
             raise RuntimeError(f"upstream timeout (>90s) on {path}")
         except aiohttp.ClientError as e:
-            raise RuntimeError(f"upstream client error: {type(e).__name__}: {str(e) or '<empty>'}")
+            safe = _mask(str(e)) or "<empty>"
+            raise RuntimeError(f"upstream client error: {type(e).__name__}: {safe}")
         text = klod_ask.extract_text(provider, data)
         if not text:
-            raise RuntimeError(f"empty LLM response: {json.dumps(data)[:200]}")
+            safe = _mask(json.dumps(data)[:200]) or ""
+            raise RuntimeError(f"empty LLM response: {safe}")
         return text, elapsed_ms
 
     async def _raw_api_klod_tts(
@@ -2923,6 +2936,8 @@ class ProxyServer:
         t0 = time.monotonic()
         clean_headers = {k: v for k, v in headers.items()
                          if k.lower() != "content-type"}
+        # Defense-in-depth: маскируем строки из upstream (см. коммент в _klod_ask_invoke).
+        from secret_mask import mask_secrets as _mask
         try:
             async with self._upstream_session.post(
                 url, json=body, headers=clean_headers,
@@ -2931,13 +2946,13 @@ class ProxyServer:
                 raw = await resp.read()
                 elapsed_ms = (time.monotonic() - t0) * 1000.0
                 if resp.status != 200:
-                    raise RuntimeError(
-                        f"upstream HTTP {resp.status}: {raw[:200].decode('utf-8','replace')}")
+                    safe = _mask(raw[:200].decode("utf-8", "replace")) or ""
+                    raise RuntimeError(f"upstream HTTP {resp.status}: {safe}")
                 try:
                     data = json.loads(raw or b"{}")
                 except Exception as e:
-                    raise RuntimeError(
-                        f"upstream non-JSON response: {str(e)} body={raw[:120]!r}")
+                    safe = _mask(repr(raw[:120])) or ""
+                    raise RuntimeError(f"upstream non-JSON response: {str(e)} body={safe}")
         except asyncio.TimeoutError:
             raise RuntimeError(f"upstream timeout (>60s) on {path}")
         except aiohttp.ClientError as e:

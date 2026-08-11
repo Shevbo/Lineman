@@ -16,6 +16,15 @@ from typing import Any
 
 # Order matters: more specific patterns first.
 _PATTERNS: list[tuple[re.Pattern, str]] = [
+    # URL с basic-auth: http://user:pass@host / socks5://user:pass@host / ftp:// ...
+    # Регрессия 2026-08-11 (fed-backup msg 24302): aiohttp прокидывал URL
+    # прокси c кредами в тексте ошибки → /api/klod/ask отдавал в ответе,
+    # /api/log в traceback. Логин оставляем видимым (диагностика: чей ключ),
+    # пароль — REDACTED. Ставим ПЕРВЫМ, чтобы generic-alphanumeric fallback
+    # не откусил только хвост пароля, оставив первые байты видимыми.
+    (re.compile(r'([a-z][a-z0-9+.\-]*://)([^:/@\s]+):([^@/\s]+)@', re.I),
+     lambda m: m.group(1) + m.group(2) + ':***REDACTED***@'),
+
     # Telegram bot URL: api.telegram.org/bot<TOKEN>/  — first, very specific
     (re.compile(r'(api\.telegram\.org/bot)([0-9]{6,12}:[A-Za-z0-9_-]{20,})', re.I),
      lambda m: m.group(1) + m.group(2).split(':')[0] + ':***REDACTED***'),
