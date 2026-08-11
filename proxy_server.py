@@ -1575,7 +1575,11 @@ class ProxyServer:
             self._send_simple_and_close(wr, 500, {"error": str(e)})
 
     def _send_simple_and_close(self, wr: asyncio.StreamWriter, status: int, payload: dict) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        body_str = json.dumps(payload, ensure_ascii=False)
+        # См. коммент в _send_json_response — defense-in-depth авто-маскировка.
+        from secret_mask import mask_secrets as _mask
+        body_str = _mask(body_str) or body_str
+        body = body_str.encode("utf-8")
         reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
                   404: "Not Found", 500: "Internal Server Error",
                   503: "Service Unavailable"}.get(status, "OK")
@@ -1769,7 +1773,17 @@ class ProxyServer:
         wr.close()
 
     def _send_json_response(self, wr: asyncio.StreamWriter, status: int, data: dict[str, Any]) -> None:
-        body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        body_str = json.dumps(data, ensure_ascii=False, indent=2)
+        # Defense-in-depth (2026-08-11): auto-mask любые случайно попавшие
+        # в тело ответа секреты — Bearer/api_key/http://user:pass@ и т.п.
+        # Регрессия msg 24302 fed-backup: /api/klod/ask отдал URL прокси
+        # с basic-auth. Точечные фиксы уже стоят в _raw_api_klod_ask и
+        # _klod_ask_invoke, но wrapper покрывает ВСЕ /api/* пути — если
+        # завтра появится новый handler, который забыл замаскировать
+        # upstream error, он не утечёт.
+        from secret_mask import mask_secrets as _mask
+        body_str = _mask(body_str) or body_str
+        body = body_str.encode("utf-8")
         wr.write(
             f"HTTP/1.1 {status} {'OK' if status == 200 else 'Error'}\r\n"
             f"Content-Type: application/json; charset=utf-8\r\n"
