@@ -1025,6 +1025,17 @@ class ProxyServer:
                         message_text = str(json.loads(body_bytes).get("message", "") or "")
                     except Exception:
                         message_text = ""
+                elif "application/x-www-form-urlencoded" in ctype:
+                    # Defensive: curl --data-urlencode шлёт "message=<encoded>";
+                    # без этой ветки клиенты попадали в plain-text branch и
+                    # хранили сырую form-строку как текст сообщения (регрессия
+                    # 2026-08-11: STL получил мусор `message=%5B...` вместо
+                    # читаемого ответа).
+                    try:
+                        form = parse_qs(body_bytes.decode("utf-8", errors="replace"))
+                        message_text = (form.get("message") or [""])[0]
+                    except Exception:
+                        message_text = ""
                 else:
                     message_text = body_bytes.decode("utf-8", errors="replace").strip()
 
@@ -1040,6 +1051,39 @@ class ProxyServer:
             source=from_agent_id,
             message=message_text[:100], # Log first 100 chars
         )
+
+        # KANONIC ROUTING FIX (2026-08-11): все сообщения ОТ klod-access к любому
+        # агенту идут в klod-access outbox (pull-model, GET /api/agent/klod-access/
+        # outbox?to=<self>). Раньше писались в federation-inbox catch-all, откуда
+        # klod-stl/vboris2/eshkola и другие подписчики outbox их не видели —
+        # каналы разные. Промах молчаливый. Теперь невозможно: from=klod-access
+        # → всегда единый outbox, который поллят ВСЕ агенты по контракту.
+        if from_agent_id == "klod-access":
+            import klod_inbox
+            in_reply_to_raw = _qs("in_reply_to")
+            in_reply_to_int: int | None = None
+            if in_reply_to_raw:
+                try:
+                    in_reply_to_int = int(in_reply_to_raw)
+                except ValueError:
+                    in_reply_to_int = None
+            try:
+                rec = klod_inbox.write_outbox(
+                    target_agent_id, message_text, in_reply_to=in_reply_to_int
+                )
+            except Exception as e:
+                self._send_json_error(wr, 500, f"klod-access outbox write failed: {e}")
+                await wr.drain(); wr.close(); return
+            self._send_json_response(wr, 200, {
+                "status": "ok",
+                "id": rec["id"],
+                "to": target_agent_id,
+                "from": from_agent_id,
+                "ts": rec["ts"],
+                "via": "klod-access-outbox",
+                "hint": "recipient pulls via GET /api/agent/klod-access/outbox?to=<self>&since=<cursor>",
+            })
+            await wr.drain(); wr.close(); return
 
         agent_meta = self._agents_meta.get(target_agent_id)
 
