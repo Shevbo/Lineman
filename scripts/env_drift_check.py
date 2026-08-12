@@ -21,8 +21,8 @@ KMASTER_URL = "http://127.0.0.1:9093"
 STATE_FILE = os.path.join(HOME, ".cache", "lineman_env_drift_state.json")
 LINEMAN_TG_URL = "http://127.0.0.1:9090/api/tg/send"
 CHAT_ID = 36910539
-TRACKED_VARS = ("LINEMAN_IPROYAL_URL", "LINEMAN_PROXY6_URL", "LINEMAN_PROXY1_URL")
-PROXY_ENV_KEYS = ("HTTPS_PROXY", "HTTP_PROXY", "LINEMAN_IPROYAL_URL", "LINEMAN_PROXY6_URL", "LINEMAN_PROXY1_URL")
+TRACKED_VARS = ("LINEMAN_PROXY6_URL", "LINEMAN_PROXY1_URL")
+PROXY_ENV_KEYS = ("HTTPS_PROXY", "HTTP_PROXY", "LINEMAN_PROXY6_URL", "LINEMAN_PROXY1_URL")
 
 
 def _km_get(name: str) -> str:
@@ -96,7 +96,7 @@ def sanitize(url):
 def detect_drift(expected, pm2_list):
     """Returns list of {svc, var, expected, actual} for drifted services."""
     drifts = []
-    iproyal = expected.get("LINEMAN_IPROYAL_URL", "")
+    iproyal = ""  # iproyal снесён 2026-08-12 — оставлено для совместимости с detect_drift
     proxy6 = expected.get("LINEMAN_PROXY6_URL", "")
     for proc in pm2_list:
         name = proc.get("name", "?")

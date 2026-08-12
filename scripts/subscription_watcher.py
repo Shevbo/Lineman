@@ -204,14 +204,22 @@ def _check_manual_expiry(service: str, keymaster_key: str, human_name: str) -> l
 
 
 def check_proxy6() -> list[dict]:
-    """Proxy6: если появится PROXY6_API_KEY — переключусь на API. Пока — manual."""
+    """Proxy6: PROXY6_API_KEY → real date_end через API. Fallback: manual PROXY6_NEXT_RENEWAL.
+
+    Ранее API-запрос шёл через iproyal-прокси, но iproyal снесён 2026-08-12
+    (истёк 11.08). proxy6.net/api сам публично доступен — ходим напрямую
+    (без system HTTPS_PROXY, иначе proxy6-туннель к proxy6.net = петля).
+    """
     api_key = _read_secret("PROXY6_API_KEY")
     if api_key:
-        # Формат API: https://proxy6.net/api/{key}/getproxy → каждый proxy имеет date_end
         try:
-            iproyal = _read_secret("LINEMAN_IPROYAL_URL")
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler(
-                {"https": iproyal, "http": iproyal} if iproyal else {}))
+            # smain outbound без прокси не проходит к proxy6.net (SSL handshake
+            # timeout). Иронично, но правильно: ходим ЧЕРЕЗ proxy6-туннель к
+            # его же публичному API. LINEMAN_PROXY6_URL уже включает basic-auth.
+            proxy_url = _read_secret("LINEMAN_PROXY6_URL")
+            handler = urllib.request.ProxyHandler(
+                {"https": proxy_url, "http": proxy_url} if proxy_url else {})
+            opener = urllib.request.build_opener(handler)
             with opener.open(f"https://proxy6.net/api/{api_key}/getproxy",
                              timeout=15) as r:
                 d = json.loads(r.read())
@@ -252,9 +260,8 @@ def check_proxy6() -> list[dict]:
     return _check_manual_expiry("proxy6", "PROXY6_NEXT_RENEWAL", "Proxy6 подписка")
 
 
-def check_iproyal() -> list[dict]:
-    """iProyal: management API у нас нет — только manual date."""
-    return _check_manual_expiry("iproyal", "IPROYAL_NEXT_RENEWAL", "iProyal подписка")
+# check_iproyal удалён 2026-08-12: iproyal снесён (подписка истекла 11.08,
+# proxy6 покрывает весь трафик единолично; см. commit sec/decom-iproyal).
 
 
 def check_anthropic_ai_plus() -> list[dict]:
@@ -275,7 +282,6 @@ def check_gemini_ai_plus() -> list[dict]:
 CHECKS = [
     check_deepseek,
     check_proxy6,
-    check_iproyal,
     check_anthropic_ai_plus,
     check_gemini_ai_plus,
 ]
