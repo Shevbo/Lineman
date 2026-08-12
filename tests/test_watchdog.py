@@ -31,7 +31,7 @@ def test_required_docs_missing():
 
 def test_paid_route_leak():
     assert check_paid_route_leak("ROUTE = deepseek-flash") != []          # платный без фолбэка
-    assert check_paid_route_leak("ROUTE = lm-studio, ollama") == []        # локальный — ок
+    assert check_paid_route_leak("ROUTE = lm-studio") == []                # локальный — ок
     assert check_paid_route_leak("ROUTE = deepseek, lm-studio") == []      # есть фолбэк
 
 

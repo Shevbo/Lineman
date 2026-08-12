@@ -40,7 +40,7 @@
 | `scripts/klod_sentry.py` | Дозор (cron */5): пробы 9090/9093/heartbeat, JSONL-история, авторестарт keymaster-api и klod-dispatch | нет |
 | `scripts/klod_rollcall.py` | Перекличка (cron 08:30): ядро+PM2+systemd+отвеченность inbox+агенты 24ч+hoster; чинит замерших, TG-сводка Боре | нет |
 | `scripts/lazy_worker.py` + `lazy_queue.py` | Lazy Queue: локальные LLM-задачи (PM2 lazy-worker) | нет |
-| `scripts/federation_sweep.py` | cron: фоновые sweep-задачи; шлёт ТОЛЬКО если ollama-hoster жив | нет |
+| `scripts/federation_sweep.py` | cron: фоновые sweep-задачи; шлёт ТОЛЬКО если lm-studio жив | нет |
 | `scripts/subscription_watcher.py` | cron 0 6 UTC (09:00 MSK): следит за proxy6/iproyal/deepseek/claude-plus/gemini-plus. Manual expiry в Ключнике: `<SERVICE>_NEXT_RENEWAL=YYYY-MM-DD`. Логи `~/logs/klod/subscriptions.jsonl`. Порог 14 дней. | нет |
 | `scripts/klod_support_watchdog.py` | cron */5 под flock+timeout: 3 валидации (V1 selfping диспетчера, V2 aging OPS-тикетов от агентов, V3 heartbeat systemd+pm2). Логи `~/logs/klod/support_watchdog.jsonl`. | нет |
 | `gemini_pro.py` | pro-гейт для google: агент без гранта → база (3.5-flash) | нет |
@@ -217,7 +217,7 @@ Lineman читает секреты из:
 1. `_resolve_upstream(provider, config)` — из `reverse_proxy.upstreams`. Провайдер unknown → 400.
 2. **Passthrough shortcut** для `/upload/*` (Google File API) — streaming без inspection.
 3. Read headers + body (лимит `_BODY_MAX`).
-4. `router.detect_context` + `router.resolve(BATCH)` → deepseek без tools может уйти в ollama-hoster.
+4. `router.detect_context` + `router.resolve(BATCH)` → deepseek без tools может уйти в lm-studio (локальный слот; ollama-hoster ликвидирован 2026-08-12).
 5. `_extract_agent_name` (X-Agent-Name / X-Lineman-Agent).
 6. **google gemini 3.1-pro guard** → rewrite на 2.5-pro (мусорный 250 RPD у 3.1-pro).
 7. **google pro-gate** (`gemini_pro.apply_pro_gate`) — pro-модель без гранта → 3.5-flash.

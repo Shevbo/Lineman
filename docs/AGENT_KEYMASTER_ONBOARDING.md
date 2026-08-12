@@ -162,7 +162,6 @@ http://10.66.0.1:9090/proxy/deepseek/v1/chat/completions
 http://10.66.0.1:9090/proxy/google/v1beta/models/{model}:generateContent
 http://10.66.0.1:9090/proxy/anthropic/v1/messages
 http://10.66.0.1:9090/proxy/openai/v1/chat/completions
-http://10.66.0.1:9090/proxy/ollama-hoster/v1/chat/completions
 http://10.66.0.1:9090/proxy/lm-studio/v1/chat/completions
 ```
 

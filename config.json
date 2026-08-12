@@ -1,16 +1,6 @@
 {
   "services": [
     {
-      "id": "ollama-hoster",
-      "name": "Ollama (hoster, CPU)",
-      "type": "openai",
-      "base_url": "http://10.66.0.7:11434",
-      "health_endpoint": "/api/tags",
-      "timeout": 10,
-      "interval": 60,
-      "proxy": false
-    },
-    {
       "id": "deepseek-flash",
       "name": "DeepSeek Flash",
       "type": "deepseek",
@@ -133,8 +123,8 @@
       "model": "google/gemma-4-e4b"
     },
     "batch": {
-      "provider": "ollama-hoster",
-      "model": "llama3.2:3b"
+      "provider": "lm-studio",
+      "model": "google/gemma-4-e4b"
     }
   },
   "proxy_server": {
@@ -169,7 +159,7 @@
     "deep_probe_every_n": 5,
     "down_threshold": 3,
     "latency_multiplier": 2.0,
-    "proxy_url": "${LINEMAN_IPROYAL_URL}",
+    "proxy_url": "${LINEMAN_PROXY6_URL}",
     "gemini_cf_proxy_url": "https://gemini-proxy-worker.bshevelev75.workers.dev",
     "proxy6_url": "${LINEMAN_PROXY6_URL}",
     "gateway_log_pattern": "/tmp/openclaw/openclaw-*.log",
@@ -223,18 +213,6 @@
         "out": 12.0,
         "ctx_k": 1024,
         "note": ">200K: $4/$18"
-      },
-      "llama3.1:8b": {
-        "in": 0.0,
-        "out": 0.0,
-        "ctx_k": 128,
-        "note": "Local Ollama"
-      },
-      "llama3.2-vision:11b": {
-        "in": 0.0,
-        "out": 0.0,
-        "ctx_k": 128,
-        "note": "Local Ollama"
       },
       "google/gemma-4-e4b": {
         "in": 0.0,
@@ -310,7 +288,6 @@
     },
     "upstreams": {
       "lm-studio": "http://127.0.0.1:1234",
-      "ollama-hoster": "http://10.66.0.7:11434",
       "deepseek": "https://api.deepseek.com",
       "google": "https://generativelanguage.googleapis.com",
       "anthropic": "https://api.anthropic.com"
@@ -426,7 +403,7 @@
       {
         "id": "iproyal",
         "name": "iProyal ISP Dedicated",
-        "url": "${LINEMAN_IPROYAL_URL}",
+        "url": "${LINEMAN_PROXY6_URL}",
         "priority": 1,
         "enabled": true
       },

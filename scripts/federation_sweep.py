@@ -119,12 +119,13 @@ PROMPTS: dict[str, str] = {
 }
 
 
-def _ollama_alive() -> bool:
-    """Sweep-задачи ходят только в ollama-hoster. Он с 2026-06-07 на ручном
-    запуске (OOM-инцидент) и неделями лежит — без этой проверки каждый прогон
-    крона плодил задачи, которые гарантированно умирали 502 (591 err/сутки)."""
+def _local_llm_alive() -> bool:
+    """Sweep-задачи ходят только в локальный бесплатный бэкенд. Раньше это был
+    ollama-hoster; он ликвидирован 2026-08-12 (нет ресурсов на hoster), остался
+    lm-studio. Проверка обязательна: без неё каждый прогон крона плодит задачи,
+    которые гарантированно умирают 502 (было 591 err/сутки в июне)."""
     try:
-        req = urllib.request.Request("http://10.66.0.7:11434/api/tags")
+        req = urllib.request.Request("http://127.0.0.1:1234/v1/models")
         with _NOPROXY.open(req, timeout=3) as r:
             return r.status == 200
     except Exception:
@@ -132,8 +133,8 @@ def _ollama_alive() -> bool:
 
 
 def main() -> int:
-    if not _ollama_alive():
-        print("[sweep] ollama-hoster недоступен — skip (задачи бы умерли 502)")
+    if not _local_llm_alive():
+        print("[sweep] lm-studio недоступен — skip (задачи бы умерли 502)")
         return 0
     if _lazy_busy():
         print("[sweep] queue has user-priority jobs — skip")

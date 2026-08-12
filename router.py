@@ -57,8 +57,9 @@ FALLBACK_CHAINS: dict[RouteContext, list[Route]] = {
         Route("gemini", "gemini-2.5-flash"),
         Route("deepseek", "deepseek-v4-flash"),
     ],
+    # ollama-hoster ликвидирован 2026-08-12 (нет ресурсов на hoster; локальный
+    # LLM переедет на отдельный хост). Локальный слот теперь только lm-studio.
     RouteContext.BATCH: [
-        Route("ollama-hoster", "llama3.2:3b"),
         Route("lm-studio", "gemma-4-e4b"),
         Route("deepseek", "deepseek-v4-flash"),
     ],

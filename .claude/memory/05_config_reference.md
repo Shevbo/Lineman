@@ -5,7 +5,7 @@ Auto-backup при изменении: `config.json.bak-YYYYMMDD-HHMMSS`. Пер
 ## Структура верхнего уровня
 
 ```
-services[]          health-probes (lm-studio, ollama-hoster, deepseek-flash/pro, gemini-flash/pro,
+services[]          health-probes (lm-studio, deepseek-flash/pro, gemini-flash/pro,
                     google-drive/gmail/calendar, telegram)
 routing             smart-routing rules (default/think/background/longContext/webSearch/local/batch)
 proxy_server        host, port, max_connections, request_timeout, llm_queue limits
@@ -53,7 +53,7 @@ proxy_pool          proxies + routes + host_circuit_breaker
 
 ### reverse_proxy.upstreams
 - `lm-studio: http://127.0.0.1:1234` — **это SSH-туннель** smain → shevbo-pi → 192.168.1.70:1234 (hyperv в LAN Бори). Команда туннеля: `ssh -L 1234:192.168.1.70:1234 shevbo-pi`. Модели: `google/gemma-4-e4b`, `gemma-4-26b-a4b-it-imatrix`, `deepseek-r1-distill-qwen-14b`, embeddings.
-- `ollama-hoster: http://10.66.0.7:11434` — Ollama на hoster (без /v1 префикса, см. инцидент 2026-05-29). Модель: `llama3.2:1b`. Используется censor_analyzer.
+- ~~`ollama-hoster`~~ — ликвидирован 2026-08-12 (нет ресурсов на hoster). Единственный локальный бэкенд — `lm-studio`. censor_analyzer переведён на него.
 - `deepseek: https://api.deepseek.com`
 - `google: https://generativelanguage.googleapis.com`
 - `anthropic: https://api.anthropic.com`
@@ -67,7 +67,7 @@ proxy_pool          proxies + routes + host_circuit_breaker
 - `longContext` (>60K токенов): gemini-3.1-pro-preview
 - `webSearch`: gemini-2.5-flash
 - `local`: lm-studio (gemma-4-e4b)
-- `batch`: ollama-hoster (llama3.2:3b)
+- `batch`: lm-studio (google/gemma-4-e4b)
 
 ### agents.node_map
 Только смайн: main, selfcoder, qaper, virtual-boris, titan, nurse, guilya, jobsearch-scanner, resume-editor, interview-coach, inbox

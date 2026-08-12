@@ -26,7 +26,7 @@
 | Агент↔агент | `POST /api/agent/<id>/message?from=&message=` | ✅ |
 | Telegram Боре | `POST /api/tg/send` {account,chat_id,text} | ✅ |
 | Бюджет | `GET /api/budget` | ✅ (учёт anthropic завышен — bug, проверить) |
-| Lazy Queue (локальные LLM-джобы) | `from lazy_client import submit_and_wait`; kinds vision/ocr/summarise/... | ❓ (бэкенд ollama-hoster выключен 2026-06-07, фолбэк) |
+| Lazy Queue (локальные LLM-джобы) | `from lazy_client import submit_and_wait`; kinds vision/ocr/summarise/... | ✅ на lm-studio (ollama-hoster ликвидирован 2026-08-12) |
 | Утечка секрета | `POST /api/keymaster/leak_alert` | ❓ |
 | Вход пользователей (portal) | `POST {SHECTORY_PORTAL_URL}/api/internal/verify-portal-credentials` (см. [PORTAL_AUTH_STANDARD.md](PORTAL_AUTH_STANDARD.md)) | ✅ |
 
@@ -70,5 +70,5 @@
 - Verify всех ❓ (по одному smoke-тесту).
 - Re-auth gog (Боря) → синк этого каталога в Google-вики через `gog docs write`.
 - Расследовать завышенный `/api/budget` (anthropic used_usd).
-- Поднять lazy_queue ollama-hoster обратно (~через 3-5 дней, см. [[incident-hoster-oom-ollama]]).
+- Локальный LLM-хост под lazy_queue (замена ликвидированному ollama-hoster, ориентир осень 2026).
 - Свести дубли документации (исторически: дубли lineman/WIKI, стухшие заметки).

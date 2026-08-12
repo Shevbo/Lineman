@@ -150,7 +150,7 @@ def _lazy_queue_audit() -> dict:
             out["by_backend"][backend] = {
                 "calls": calls, "tokens": toks, "saved_usd": round(saved, 4),
             }
-            if backend in ("ollama-hoster", "lm-studio"):
+            if backend == "lm-studio":   # единственный локальный бэкенд с 2026-08-12
                 local_calls += calls
             else:
                 paid_calls += calls
@@ -294,9 +294,9 @@ def main() -> int:
     connect_flagged = _q(cur, """
         SELECT COUNT(*) FROM request_log
         WHERE route_applied='connect_tunnel_llm_flagged' AND timestamp>datetime('now','-1 days')""")[0][0]
-    ollama_ok = _q(cur, """
+    local_ok = _q(cur, """
         SELECT SUM(CASE WHEN status_code=200 THEN 1 ELSE 0 END), COUNT(*)
-        FROM request_log WHERE llm_provider='ollama-hoster' AND timestamp>datetime('now','-1 days')""")[0]
+        FROM request_log WHERE llm_provider='lm-studio' AND timestamp>datetime('now','-1 days')""")[0]
     dedup_hits = _q(cur, """
         SELECT COUNT(*) FROM request_log
         WHERE optimization LIKE 'dedup%' AND timestamp>datetime('now','-1 days')""")[0][0]
@@ -329,9 +329,8 @@ def main() -> int:
     if huge_ctx:
         top_agent, top_model, top_tokens, _cnt = huge_ctx[0]
         actions.append(f"P1: tokens_in > {KPI_HUGE_CTX_TOKENS} y агента {top_agent} ({top_model}, max {top_tokens}). Подключить auto-summarise.")
-    if ollama_ok[1] and ollama_ok[0] / max(ollama_ok[1], 1) < 0.5:
-        actions.append(f"P0: ollama-hoster: {ollama_ok[0]}/{ollama_ok[1]} успехов за сутки. KPI 'ollama для простых' не выполняется.")
-        p0 = True
+    if local_ok[1] and local_ok[0] / max(local_ok[1], 1) < 0.5:
+        actions.append(f"P1: lm-studio: {local_ok[0]}/{local_ok[1]} успехов за сутки. Локальный бэкенд деградировал.")
     for prov, cnt, errs, _toks in by_provider:
         if cnt >= 50 and errs and 100 * errs / cnt > KPI_PROVIDER_ERR_PCT:
             actions.append(f"P1: {prov} error_rate {100*errs/cnt:.1f}% ({errs}/{cnt}). Расследовать.")
@@ -387,7 +386,7 @@ def main() -> int:
         f"- 403 на LLM (геоблок?): {geoblock_403}",
         f"- LLM через CONNECT (миснастройка): {connect_flagged}",
         f"- Подозрительные тела (api_key/sk-/Bearer): {leak_count}",
-        f"- ollama-hoster success/total: {ollama_ok[0]}/{ollama_ok[1]}",
+        f"- lm-studio success/total: {local_ok[0]}/{local_ok[1]}",
         f"- dedup_hit за сутки: {dedup_hits}",
         f"- Доля deepseek-flash в LLM: {flash_share*100:.1f}%",
         "",

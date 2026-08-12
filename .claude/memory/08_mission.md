@@ -19,7 +19,7 @@ Lineman — не просто прокси-сервис. Это **главный
 Без `source_agent` запросы помечены как `(none)` — это slip-through. Раз в сутки Censor показывает, сколько от каждого источника. Если **>10% запросов без source_agent** за сутки — это требует расследования: какой агент забыл хедер.
 
 ### 3. Оптимизировать
-- Smart routing (`router.py`): DEFAULT → DeepSeek-flash, THINK → DeepSeek-pro, LONG_CONTEXT → Gemini-pro, BATCH → ollama-hoster. Корректирую если агенты пишут на «не тот класс» (мониторинг через `Router.recent_decisions`).
+- Smart routing (`router.py`): DEFAULT → DeepSeek-flash, THINK → DeepSeek-pro, LONG_CONTEXT → Gemini-pro, BATCH → lm-studio (локальный). Корректирую если агенты пишут на «не тот класс» (мониторинг через `Router.recent_decisions`).
 - Compression (`reverse_proxy.py:summarise_addendums`): когда tail > useful, прогоняю последние сообщения через DeepSeek-flash, заменяю историю summary. Сэкономлено за 14 дней — 192M токенов в 7K запросах.
 - Pool selection (`pool.py`): per-host circuit breaker, автоматический failover с iProyal на Proxy6 при tripped circuit.
 - Dedup cache (`dedup_cache.py`): окно 60s, до 200 entries — режет дубли LLM-запросов внутри короткого окна.

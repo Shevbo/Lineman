@@ -69,7 +69,8 @@ def check_paid_route_leak(routes_text: str) -> list[Violation]:
     """В lazy_queue не должно быть платного deepseek (инцидент: жёг миллионы/день)."""
     out: list[Violation] = []
     low = routes_text.lower()
-    if "deepseek" in low and "lm-studio" not in low and "ollama" not in low:
+    # ollama-hoster ликвидирован 2026-08-12 — локальным считается только lm-studio
+    if "deepseek" in low and "lm-studio" not in low:
         out.append(Violation("paid_route_leak", "high", "lazy_queue",
                              "платный deepseek в lazy_queue без локального фолбэка"))
     return out

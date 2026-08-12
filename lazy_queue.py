@@ -3,7 +3,7 @@
 Контракт:
 - Любой агент `POST /api/queue/lazy` с {kind, prompt, system?, ...} → {job_id}.
 - Worker (scripts/lazy_worker.py) тянет задачи по приоритету и шлёт на local LLM
-  (LM Studio → Ollama-hoster → DeepSeek-flash fallback).
+  (LM Studio, DeepSeek-flash только явным роутом).
 - Агент забирает `GET /api/queue/lazy/<id>` → {status, output, ...}.
 
 См. docs/LAZY_QUEUE.md для подробного дизайна.
@@ -29,44 +29,41 @@ HTTP_TIMEOUT = 180
 # vision+текст, 77 tok/s) + deepseek-r1-14b (8.4GB, reasoning) = 14.5GB < 16GB.
 # Тяжёлая gemma-26b (13GB, 7 tok/s) НЕ помещается ни с чем — убрана из всех
 # LM Studio маршрутов. Всё лёгкое и vision → qwen/qwen3.5-9b, рассуждения → deepseek-r1.
-# llama3.2:1b и deepseek-flash/pro живут на других backend-ах (не жрут hyperv VRAM).
+# deepseek-flash/pro живут на другом backend-е (не жрут hyperv VRAM).
 # ПОЛИТИКА ЭКОНОМИИ (2026-06-10): lazy_queue = ТОЛЬКО бесплатные локальные бэкенды
-# (lm-studio/ollama-hoster, вкл. локальный deepseek-r1 на lm-studio). Платный deepseek
+# (lm-studio, вкл. локальный deepseek-r1 на lm-studio). Платный deepseek
 # (API) УБРАН из всех fallback — «бездарные краны» (federation_sweep и т.п.) больше НЕ
 # текут молча в платный deepseek. Нужна умная модель → агент идёт ЯВНЫМ роутом
 # (/proxy/deepseek с X-Lineman-Route think), а не молчаливым lazy-фолбэком. Если все
 # локальные бэкенды недоступны — job остаётся queued/retry (не платим).
 ROUTES: dict[str, list[tuple[str, str]]] = {
-    "tune":      [("lm-studio", "qwen/qwen3.5-9b"),
-                  ("ollama-hoster", "llama3.2:1b")],
-    "eval":      [("ollama-hoster", "llama3.2:1b"),
-                  ("lm-studio", "qwen/qwen3.5-9b")],
-    "lint":      [("ollama-hoster", "llama3.2:1b"),
-                  ("lm-studio", "qwen/qwen3.5-9b")],
+    "tune":      [("lm-studio", "qwen/qwen3.5-9b")],
+    "eval":      [("lm-studio", "qwen/qwen3.5-9b")],
+    "lint":      [("lm-studio", "qwen/qwen3.5-9b")],
     "html":      [("lm-studio", "qwen/qwen3.5-9b")],
     "css":       [("lm-studio", "qwen/qwen3.5-9b")],
     "summarise": [("lm-studio", "qwen/qwen3.5-9b")],
     "critique":  [("lm-studio", "qwen/qwen3.5-9b")],
     "reason":    [("lm-studio", "deepseek-r1-distill-qwen-14b")],  # локальный, бесплатно
-    # sweep-варианты (federation_sweep.py, cron каждые 10 мин) — только ollama-hoster.
-    "sweep_doc":      [("ollama-hoster", "llama3.2:1b")],
-    "sweep_deadcode": [("ollama-hoster", "llama3.2:1b")],
-    "sweep_secsan":   [("ollama-hoster", "llama3.2:1b")],
-    "sweep_hardcode": [("ollama-hoster", "llama3.2:1b")],
-    "sweep_leaks":    [("ollama-hoster", "llama3.2:1b")],
+    # sweep-варианты (federation_sweep.py, cron) — lm-studio, после ликвидации
+    # ollama-hoster 2026-08-12. Бэкенд недоступен -> sweep просто не запускается.
+    "sweep_doc":      [("lm-studio", "qwen/qwen3.5-9b")],
+    "sweep_deadcode": [("lm-studio", "qwen/qwen3.5-9b")],
+    "sweep_secsan":   [("lm-studio", "qwen/qwen3.5-9b")],
+    "sweep_hardcode": [("lm-studio", "qwen/qwen3.5-9b")],
+    "sweep_leaks":    [("lm-studio", "qwen/qwen3.5-9b")],
     "task-split":     [("lm-studio", "qwen/qwen3.5-9b")],
     "vision":   [("lm-studio", "qwen/qwen3.5-9b")],
     "ocr":      [("lm-studio", "qwen/qwen3.5-9b")],
     "caption":  [("lm-studio", "qwen/qwen3.5-9b")],
     "describe": [("lm-studio", "qwen/qwen3.5-9b")],
 }
-DEFAULT_ROUTE = [("ollama-hoster", "llama3.2:1b"),
-                 ("lm-studio", "qwen/qwen3.5-9b")]
+DEFAULT_ROUTE = [("lm-studio", "qwen/qwen3.5-9b")]
 
 # Local backends = zero cost. Если job ушёл на один из них вместо платного,
 # считаем экономию относительно baseline-цены (deepseek-v4-flash по умолчанию,
 # для тяжёлых kind — deepseek-v4-pro как разумная замена).
-LOCAL_BACKENDS = {"ollama-hoster", "lm-studio"}
+LOCAL_BACKENDS = {"lm-studio"}
 
 # USD per 1M tokens (from config.json pricing на 2026-06)
 BASELINE_PRICE_FLASH = {"in": 0.14, "out": 0.28}  # deepseek-v4-flash

@@ -79,13 +79,24 @@ BATCH_CONFIG = {
 }
 
 
-def test_router_batch_route_resolves_to_ollama():
-    """Router.resolve(BATCH) must return ollama-hoster/llama3.2:3b from fallback chain."""
+def test_router_batch_route_resolves_to_local_lm_studio():
+    """BATCH идёт в локальный бесплатный бэкенд.
+
+    До 2026-08-12 первым в цепочке был ollama-hoster; узел ликвидирован
+    (нет ресурсов на hoster), локальный слот остался один — lm-studio.
+    """
     from router import Router, RouteContext
     router = Router({})
     route = router.resolve(RouteContext.BATCH)
-    assert route.provider == "ollama-hoster"
-    assert route.model == "llama3.2:3b"
+    assert route.provider == "lm-studio"
+    assert route.model == "gemma-4-e4b"
+
+
+def test_router_has_no_ollama_routes():
+    """Регрессия ликвидации: ollama не должен вернуться ни в один маршрут."""
+    from router import FALLBACK_CHAINS
+    for ctx, chain in FALLBACK_CHAINS.items():
+        assert all("ollama" not in r.provider for r in chain), ctx
 
 
 def test_router_batch_detect_from_cron_keyword():
