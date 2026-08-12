@@ -1,5 +1,24 @@
 # Журнал инцидентов Lineman
 
+## 2026-08-12 — Ликвидация узла ollama-hoster (решение Бори)
+
+**Причина:** на hoster нет ресурсов (5.9GB RAM, earlyoom, история OOM 2026-06-07 и 2026-07-03). Локальный LLM развернём на отдельном хосте ориентировочно осенью 2026.
+
+**Факт на момент решения:** 57 запросов за 90 суток, ВСЕ со статусом ошибки. Единственный потребитель — `censor_analyzer.py` (cron каждые 6ч): каждый прогон впустую ждал 120с таймаута и уходил в deepseek-фолбэк.
+
+**Снято в Lineman:** `services[]`, `reverse_proxy.upstreams`, `routing.batch` (→ lm-studio/google/gemma-4-e4b), pricing-записи Local Ollama, цепочка `router.FALLBACK_CHAINS[BATCH]`, `lazy_queue.ROUTES`/`DEFAULT_ROUTE`/`LOCAL_BACKENDS`, гейт `federation_sweep` (теперь проверяет lm-studio), KPI дневного аудита (теперь lm-studio), `watchdog.check_paid_route_leak`, `state.json`/`metrics.json`.
+
+**Снято на hoster (10.66.0.7):** unit + `ollama.service.d/override.conf`, бинарь `/usr/local/bin/ollama` (45МБ), `/usr/share/ollama` с моделями (1.3ГБ), системный юзер/группа `ollama`. Диск 75% → 73%.
+
+**Смежное:** `censor_analyzer.py` переведён на lm-studio (qwen/qwen3.5-9b), фолбэк deepseek-flash сохранён.
+
+**Документация:** FEDERATION.md, lineman/CLAUDE.md, docs/FEDERATION_SKILLS.md, docs/AGENT_KEYMASTER_ONBOARDING.md, memory 05/08. Исторические отчёты и DAILY не переписывались.
+
+**Оповещение:** рассылка 16 агентам через outbox (id 24817-24832).
+
+**Проверка:** `/proxy/ollama-hoster/*` → 400 unknown provider, health ok (11 сервисов, down пуст), тесты Lineman 290 + censor 29 зелёные.
+
+
 ## 2026-08-11 — PONG-шторм: диспетчер переотвечал старые SELFPING (256 записей за 4 мин)
 
 **Симптом:** outbox рос экспоненциально, 20:03-20:07 UTC. За минуту 128 записей `to=dispatch-selfping` с текстом `PONG ... mid=<старый>`, mid из давно закрытых пингов (22875, 23300). Дельта удваивалась каждый tick (20с).
