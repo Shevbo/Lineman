@@ -37,7 +37,7 @@ from dedup_cache import DedupCache
 from tg_miniapp import validate_init_data, user_id_allowed
 from backlog import BacklogStore, enqueue_builder_ticket
 from federation_registry import load_registry, resolve as resolve_repo
-from federation_inbox import deliver_to_local_agent
+from federation_inbox import deliver_to_local_agent, read_inbox as _read_agent_inbox
 
 logger = structlog.get_logger(__name__)
 
@@ -664,6 +664,17 @@ class ProxyServer:
                 wr.close()
                 return
 
+            # Generic per-agent inbox read (federation_inbox JSONL).
+            # GET /api/agent/{agent_id}/inbox?since=<N>&limit=<K>
+            # (klod-access has its own dedicated handler above at :555.)
+            elif (
+                request_path_only.startswith("/api/agent/")
+                and request_path_only.endswith("/inbox")
+                and method == "GET"
+            ):
+                await self._raw_api_agent_inbox(rd, wr, request_path)
+                return
+
             # Agent-to-agent messaging API
             # /api/agent/{target_agent_id}/message?from=<from_agent_id>&message=<msg>
             elif request_path_only.startswith("/api/agent/"):
@@ -1182,6 +1193,50 @@ class ProxyServer:
                 status_code = 500
 
         self._send_json_response(wr, status_code, response_data)
+        await wr.drain()
+        wr.close()
+
+    async def _raw_api_agent_inbox(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        request_path: str,
+    ) -> None:
+        """GET /api/agent/{agent_id}/inbox?since=<N>&limit=<K> -- read agent inbox JSONL.
+
+        Generic per-agent pull для 4-window pool паттерна: любой agent_id (кроме
+        klod-access, у которого свой dedicated handler) читает свою file-backed
+        inbox через federation_inbox.read_inbox. Регрессия 2026-08-13: STL нашёл,
+        что запись работала (POST message), а чтения не было — только klod-access.
+        """
+        await self._read_headers(rd)
+        path_only = urlparse(request_path).path
+        parts = path_only.split("/")
+        # Expected: ['', 'api', 'agent', '{id}', 'inbox']
+        if len(parts) != 5 or parts[4] != "inbox" or not parts[3]:
+            self._send_json_error(wr, 400, "Usage: GET /api/agent/{id}/inbox?since=N&limit=K")
+            await wr.drain()
+            wr.close()
+            return
+        agent_id = parts[3]
+        qs = parse_qs(urlparse(request_path).query)
+        try:
+            since = int((qs.get("since") or ["0"])[0])
+        except ValueError:
+            since = 0
+        try:
+            limit = int((qs.get("limit") or ["100"])[0])
+        except ValueError:
+            limit = 100
+        limit = max(1, min(limit, 500))
+        try:
+            messages = _read_agent_inbox(agent_id, since_id=since, limit=limit)
+        except Exception as e:
+            self._send_json_error(wr, 500, f"read_inbox failed: {e}")
+            await wr.drain()
+            wr.close()
+            return
+        self._send_json_response(wr, 200, {"messages": messages})
         await wr.drain()
         wr.close()
 
