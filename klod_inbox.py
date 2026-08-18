@@ -147,7 +147,19 @@ def _tail_jsonl(path: Path, since: int = 0, limit: int = 50) -> list[dict[str, A
                 d = json.loads(line)
             except Exception:
                 continue
-            if d.get("id", 0) > since:
+            # Defensive: одна кривая запись с id=str (напр. pingmaster@pi
+            # 2026-08-15 id="26637") ложила весь endpoint через TypeError
+            # 'str > int' → klod-dispatch не мог прочесть свой inbox и
+            # молчал агентам 3 суток. Coerce'им к int, при неудаче скипаем.
+            try:
+                rid = int(d.get("id", 0))
+            except (TypeError, ValueError):
+                continue
+            try:
+                since_i = int(since)
+            except (TypeError, ValueError):
+                since_i = 0
+            if rid > since_i:
                 out.append(d)
     return out[-limit:]
 
@@ -279,7 +291,16 @@ def read_outbox(since: int = 0, limit: int = 50, to: str | None = None) -> list[
                 d = json.loads(line)
             except Exception:
                 continue
-            if d.get("id", 0) <= since:
+            # Defensive int coerce (см. _tail_jsonl 2026-08-18 poison fix).
+            try:
+                rid_cmp = int(d.get("id", 0))
+            except (TypeError, ValueError):
+                continue
+            try:
+                since_i = int(since)
+            except (TypeError, ValueError):
+                since_i = 0
+            if rid_cmp <= since_i:
                 continue
             if to is not None and d.get("to") != to:
                 continue
@@ -289,7 +310,10 @@ def read_outbox(since: int = 0, limit: int = 50, to: str | None = None) -> list[
         status = load_delivery_status()
         cursors = load_pull_cursors()
         for d in out:
-            rid = d.get("id", 0)
+            try:
+                rid = int(d.get("id", 0))
+            except (TypeError, ValueError):
+                rid = 0
             st = status.get(rid)
             if st is not None:
                 d["delivered"] = st.get("delivered")
