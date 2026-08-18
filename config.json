@@ -290,7 +290,12 @@
       "lm-studio": "http://127.0.0.1:1234",
       "deepseek": "https://api.deepseek.com",
       "google": "https://generativelanguage.googleapis.com",
-      "anthropic": "https://api.anthropic.com"
+      "anthropic": "https://api.anthropic.com",
+      "kimi": "https://api.moonshot.ai/v1",
+      "kimi-anthropic": "https://api.moonshot.ai/anthropic"
+    },
+    "provider_rpm_limits": {
+      "kimi": 3
     },
     "daily_agent_token_caps": {
       "career-bot": {

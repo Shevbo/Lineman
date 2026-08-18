@@ -8,6 +8,7 @@ extracts token counts from request/response bodies, logs to request_log.
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import os
 import re
@@ -319,6 +320,43 @@ UPSTREAM_MAP: dict[str, str] = {
     "google": "https://generativelanguage.googleapis.com",
 }
 
+# --- Kimi (Moonshot) org-wide RPM gate ---------------------------------
+# fed-backup msg 27171 (2026-08-18): Moonshot отдаёт organization max RPM=3 —
+# три запроса в минуту НА ВСЮ ОРГАНИЗАЦИЮ, не на ключ, и не на маршрут.
+# "kimi" (нативный OpenAI-подобный /v1) и "kimi-anthropic" (Anthropic-совместимый
+# /anthropic) бьют в ОДНУ и ту же квоту — поэтому у обоих provider-имён общий
+# счётчик под ключом группы "kimi". Kimi намеренно НЕ в router.py
+# FALLBACK_CHAINS/config.routing — при фан-ауте подагентов лимит выбивается
+# мгновенно, так что это ручной/explicit выбор, не default и не фолбэк.
+_PROVIDER_RPM_GROUPS: dict[str, str] = {
+    "kimi": "kimi",
+    "kimi-anthropic": "kimi",
+}
+_PROVIDER_RPM_WINDOW_S = 60.0
+_provider_rpm_calls: dict[str, collections.deque] = collections.defaultdict(collections.deque)
+
+
+def _provider_rpm_check(provider: str, config: dict[str, Any] | None) -> tuple[bool, float]:
+    """Sliding-window RPM gate shared across all provider names in the same
+    rpm group. Returns (allowed, retry_after_s). Call BEFORE forwarding —
+    a rejected call is not counted against the window."""
+    group = _PROVIDER_RPM_GROUPS.get(provider)
+    if not group:
+        return True, 0.0
+    limits = ((config or {}).get("reverse_proxy", {}) or {}).get("provider_rpm_limits", {})
+    limit = int(limits.get(group, 0) or 0)
+    if limit <= 0:
+        return True, 0.0
+    now = time.time()
+    dq = _provider_rpm_calls[group]
+    cutoff = now - _PROVIDER_RPM_WINDOW_S
+    while dq and dq[0] < cutoff:
+        dq.popleft()
+    if len(dq) >= limit:
+        return False, dq[0] + _PROVIDER_RPM_WINDOW_S - now
+    dq.append(now)
+    return True, 0.0
+
 # Минимальное число токенов system-prompt, после которого Lineman сам
 # включает Anthropic ephemeral prompt-caching. Кэшированные input-токены
 # в Anthropic стоят 0.1× от обычных — экономия до 90% на повторяющемся
@@ -461,6 +499,54 @@ def _google_api_key() -> str:
         return (_oc.get("models", {}).get("providers", {}).get("google", {}).get("apiKey", "") or "").strip()
     except Exception:
         return ""
+
+
+_KIMI_KEYMASTER_URL = "http://127.0.0.1:9093/keymaster/request-value"
+_kimi_key_cache: dict[str, Any] = {"value": "", "checked_at": 0.0}
+_KIMI_KEY_RECHECK_S = 60.0
+
+
+async def _kimi_api_key(session: aiohttp.ClientSession) -> str:
+    """Kimi (Moonshot) ключ. НЕ в start.sh LINEMAN_SECRETS (Kimi — маленький
+    3-RPM провайдер, не критичный путь; boot Lineman не должен падать из-за
+    него). Сначала ENV (если когда-нибудь добавят в boot-список), иначе
+    ленивый request-value к локальному Keymaster с кэшем значения и
+    короткий cooldown между повторными попытками, пока Боря не проставит
+    pre_approved для requester=lineman (см. fed-backup msg 27171)."""
+    env_key = os.environ.get("KIMI_API_KEY", "")
+    if env_key:
+        return env_key
+    if _kimi_key_cache["value"]:
+        return _kimi_key_cache["value"]
+    now = time.time()
+    if now - _kimi_key_cache["checked_at"] < _KIMI_KEY_RECHECK_S:
+        return ""
+    _kimi_key_cache["checked_at"] = now
+    try:
+        async with session.post(
+            _KIMI_KEYMASTER_URL,
+            params={"name": "KIMI_API_KEY", "requester": "lineman", "purpose": "kimi-routing"},
+            timeout=aiohttp.ClientTimeout(total=8),
+        ) as resp:
+            data = await resp.json()
+    except Exception:
+        logger.exception("kimi_key_request_failed")
+        return ""
+    if data.get("status") != "approved":
+        logger.warning("kimi_key_not_approved", status=data.get("status"))
+        return ""
+    delivery = str(data.get("delivery") or "")
+    if delivery.startswith("~"):
+        delivery = os.path.expanduser(delivery)
+    try:
+        with open(delivery) as f:
+            value = f.read().strip()
+    except Exception:
+        logger.exception("kimi_key_delivery_read_failed", delivery=delivery[:60])
+        return ""
+    if value:
+        _kimi_key_cache["value"] = value
+    return value
 
 
 def _strip_query_key(url: str) -> str:
@@ -631,6 +717,17 @@ async def handle_reverse_proxy(
     upstream_base = _resolve_upstream(provider, config)
     if not upstream_base:
         await _send_json_error(writer, 400, f"Unknown provider: {provider!r}")
+        return
+
+    # Org-wide RPM gate (Kimi/Moonshot: 3 RPM total, see _provider_rpm_check docstring)
+    _rpm_ok, _rpm_retry_after = _provider_rpm_check(provider, config)
+    if not _rpm_ok:
+        logger.warning("provider_rpm_blocked", provider=provider,
+                       retry_after_s=round(_rpm_retry_after, 1))
+        await _send_json_error(
+            writer, 429,
+            f"[LINEMAN] Провайдер '{provider}': org RPM лимит исчерпан, "
+            f"retry через {_rpm_retry_after:.0f}s")
         return
 
     # Streaming passthrough for large uploads (no body buffering or inspection)
@@ -987,6 +1084,25 @@ async def handle_reverse_proxy(
         ds_key = os.environ.get("DEEPSEEK_API_KEY", "")
         if ds_key:
             fwd_headers["authorization"] = f"Bearer {ds_key}"
+
+    # Kimi (Moonshot): "kimi" — нативный OpenAI-подобный /v1 (Bearer),
+    # "kimi-anthropic" — Anthropic-совместимый /anthropic (x-api-key + anthropic-version).
+    # Lineman — единственный держатель KIMI_API_KEY, клиенты ключ не шлют.
+    if provider in _PROVIDER_RPM_GROUPS:
+        _fwd_keys_lower = {k.lower() for k in fwd_headers}
+        if "authorization" not in _fwd_keys_lower and "x-api-key" not in _fwd_keys_lower:
+            kimi_key = await _kimi_api_key(session)
+            if not kimi_key:
+                await _send_json_error(
+                    writer, 503,
+                    "Kimi (Moonshot) API key недоступен в Keymaster (нужен pre_approved "
+                    "для requester=lineman) — обратись к klod-access.")
+                return
+            if provider == "kimi-anthropic":
+                fwd_headers["x-api-key"] = kimi_key
+                fwd_headers.setdefault("anthropic-version", "2023-06-01")
+            else:
+                fwd_headers["authorization"] = f"Bearer {kimi_key}"
 
     # Proxy pool selection
     use_proxy: str | None = None
