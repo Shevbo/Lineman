@@ -24,6 +24,7 @@ import random
 import re
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -32,6 +33,10 @@ sys.path.insert(0, os.path.dirname(THIS))
 import lazy_queue as lq  # noqa: E402
 
 LINEMAN = "http://127.0.0.1:9090"
+KEYMASTER = os.environ.get("KEYMASTER_URL", "http://127.0.0.1:9093")
+# Боря 2026-09-05: крон жёг локальную qwen/qwen3.5-9b круглосуточно (144 прогона
+# в сутки). Свипы идут только после его ОК в Ключнике на этот псевдо-секрет.
+SWEEP_OK_SECRET = "LOCAL_LLM_SWEEP_OK"
 MAX_QUEUED_SWEEP = 5  # не плодим
 WORKSPACES = [
     Path.home() / "workspaces/infra/lineman",
@@ -132,7 +137,37 @@ def _local_llm_alive() -> bool:
         return False
 
 
+def _boris_approved() -> bool:
+    """Свипы стартуют только с явного ОК Бори в Ключнике.
+
+    Не ждём ответа (крон каждые 10 минут, блокировать нельзя): спрашиваем один
+    раз и решаем по статусу.
+      approved → работаем (Guard 0 отдаёт тот же req_id без нового пинга в TG)
+      pending  → пропускаем прогон, Боря уже получил пинг (Guard 1 дедуплит)
+      denied   → пропускаем; Ключник держит отказ 24ч и молчит (Guard 2)
+    Fail-closed: Ключник недоступен, секрета нет, любая ошибка — не работаем.
+    """
+    url = f"{KEYMASTER}/keymaster/request-value?" + urllib.parse.urlencode({
+        "name": SWEEP_OK_SECRET,
+        "requester": "federation-sweep",
+        "purpose": "крон-свипы на локальной qwen/qwen3.5-9b",
+    })
+    try:
+        req = urllib.request.Request(url, method="POST")
+        with _NOPROXY.open(req, timeout=5) as r:
+            res = json.loads(r.read() or b"{}")
+    except Exception as e:
+        print(f"[sweep] Ключник недоступен ({type(e).__name__}) — skip")
+        return False
+    if res.get("status") == "approved":
+        return True
+    print(f"[sweep] нет ОК Бори (status={res.get('status') or res.get('error')}) — skip")
+    return False
+
+
 def main() -> int:
+    if not _boris_approved():
+        return 0
     if not _local_llm_alive():
         print("[sweep] lm-studio недоступен — skip (задачи бы умерли 502)")
         return 0
