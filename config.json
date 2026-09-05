@@ -98,16 +98,16 @@
   ],
   "routing": {
     "default": {
-      "provider": "deepseek",
-      "model": "deepseek-v4-flash"
+      "provider": "gemini",
+      "model": "gemini-2.5-flash"
     },
     "think": {
-      "provider": "deepseek",
-      "model": "deepseek-v4-pro"
+      "provider": "gemini",
+      "model": "gemini-2.5-pro"
     },
     "background": {
-      "provider": "deepseek",
-      "model": "deepseek-v4-flash"
+      "provider": "gemini",
+      "model": "gemini-2.5-flash"
     },
     "longContext": {
       "provider": "gemini",
