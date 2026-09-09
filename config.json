@@ -68,6 +68,32 @@
       "interval": 60,
       "proxy": true,
       "use_proxy6": false
+    },
+    {
+      "id": "deepseek-flash",
+      "name": "DeepSeek Flash",
+      "type": "deepseek",
+      "model": "deepseek-v4-flash",
+      "base_url": "https://api.deepseek.com",
+      "health_endpoint": "/v1/models",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "openclaw_config_path": "",
+      "timeout": 15,
+      "interval": 60,
+      "proxy": true
+    },
+    {
+      "id": "deepseek-pro",
+      "name": "DeepSeek Pro",
+      "type": "deepseek",
+      "model": "deepseek-v4-pro",
+      "base_url": "https://api.deepseek.com",
+      "health_endpoint": "/v1/models",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "openclaw_config_path": "",
+      "timeout": 15,
+      "interval": 60,
+      "proxy": true
     }
   ],
   "routing": {
