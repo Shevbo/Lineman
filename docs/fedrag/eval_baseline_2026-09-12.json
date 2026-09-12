@@ -1,0 +1,212 @@
+{
+  "n": 50,
+  "recall@1": 0.54,
+  "recall@3": 0.74,
+  "no_match_on_answerable": 0,
+  "latency_ms_median": 13955,
+  "latency_ms_p95": 25597,
+  "misses": [
+    [
+      "После того как я через API запустил бэктест и получил run_id, как понять что он реально досчитался и какие метрики должны быть в ответе?",
+      [
+        "docs/lab-integration-test.md"
+      ],
+      [
+        "stl:frontend/src/components/lab/BacktestLab.svelte",
+        "stl:scripts/wr_gz_night.py",
+        "stl:trader/api/app.py"
+      ],
+      0.0
+    ],
+    [
+      "Почему для честного учёта финрезультата по роботам нельзя просто смотреть на изменение баланса счёта целиком?",
+      [
+        "trader/quik/algo_ledger.py"
+      ],
+      [
+        "stl:.claude/shared/memory/feedback_finres_with_open_position.md",
+        "stl:quik_agent/internal/status/daypnl.go",
+        "stl:tests/lab/test_account_margin.py"
+      ],
+      0.0
+    ],
+    [
+      "Сколько тестов (питон/го/фронт) реально прогнали и они были зелёные, когда закончили большую чистку кода от мёртвого груза?",
+      [
+        "PONYTAIL_AUDIT.md"
+      ],
+      [
+        "fed:docs/auth-registration-readiness.md",
+        "stl:scripts/queue_recheck_truncated.py",
+        "stl:frontend/src/components/lab/BacktestLab.svelte"
+      ],
+      0.0
+    ],
+    [
+      "На какой неделе перекатили роботов с истекающего июньского фьючерса на следующий контракт и сколько их было?",
+      [
+        ".remember/archive.md"
+      ],
+      [
+        "stl:.claude/shared/memory/reference_forts_contract_roll.md",
+        "stl:.claude/shared/remember/archive.md",
+        "stl:.claude/shared/memory/reference_splice_phantom_and_session_drift.md"
+      ],
+      0.0
+    ],
+    [
+      "Что случилось с архивом рыночных данных 12 августа и как в итоге восстановили потерянное?",
+      [
+        ".remember/recent.md"
+      ],
+      [
+        "stl:.claude/shared/memory/reference_journalsync_evening_replay.md",
+        "stl:.claude/shared/memory/reference_agent_chart_truth.md",
+        "stl:.claude/shared/remember/today-2026-08-03.done.md"
+      ],
+      0.0
+    ],
+    [
+      "Сколько юнит-тестов на питоне должно оставаться зелёными, прежде чем оркестратор согласится принять изменения в проекте?",
+      [
+        "AGENTS.md"
+      ],
+      [
+        "stl:docs/superpowers/plans/2026-05-15-m4-instrument-registry.md",
+        "stl:docs/sprint02-acceptance.md",
+        "fed:docs/superpowers/plans/2026-06-19-portal-models-subsystem-a.md"
+      ],
+      0.0
+    ],
+    [
+      "Что мешало выкатить fedmail-луп сразу на все три торговых окна и как в итоге обошли эту проблему?",
+      [
+        ".remember/now.md"
+      ],
+      [
+        "stl:docs/DEVMAIL.md",
+        "stl:scripts/fedmail.py",
+        "stl:scripts/wr_gz_night.py"
+      ],
+      0.0
+    ],
+    [
+      "Как вообще восстановили бэкенд STL после того как он потерялся, если в git его не было?",
+      [
+        "README.md"
+      ],
+      [
+        "fed:docs/STL_BACKUP_ARTIFACTS.md",
+        "stl:.claude/shared/memory/project_quik_agent_phase1.md",
+        "stl:docs/critical-gotchas.md"
+      ],
+      0.0
+    ],
+    [
+      "На какой неделе выкатили Companion.exe для Windows с трей-иконкой и DPAPI-авторизацией?",
+      [
+        ".remember/archive.md"
+      ],
+      [
+        "stl:.claude/shared/remember/archive.md",
+        "stl:.claude/shared/remember/today-2026-07-25.done.md",
+        "stl:companion/main.go"
+      ],
+      0.0
+    ],
+    [
+      "Может ли STL сама автоматически выставить роботу заявку через этот модуль, или там только ручные команды оператора?",
+      [
+        "trader/quik/orders.py"
+      ],
+      [
+        "stl:trader/lab/robot_stand.py",
+        "stl:quik_agent/PHASE2.md",
+        "stl:.claude/shared/memory/project_fedbot_autoresponder.md"
+      ],
+      0.0
+    ],
+    [
+      "Почему при кратковременном падении бэкенда интерфейс не пытается показать сырой ответ сервера, а сразу пишет отдельное сообщение про перезапуск?",
+      [
+        "frontend/src/lib/fetch-auth.ts"
+      ],
+      [
+        "stl:.claude/shared/memory/feedback_fix_any_bug_found.md",
+        "stl:.claude/shared/memory/project_churn_filters.md",
+        "stl:quik_agent/README.md"
+      ],
+      0.0
+    ],
+    [
+      "Why does the 30-minute button on the charts quietly draw M15 candles instead of its own timeframe?",
+      [
+        "frontend/src/lib/chart-time.ts"
+      ],
+      [
+        "stl:trader/api/app.py",
+        "stl:frontend/src/components/ChartFrame.svelte",
+        "stl:frontend/src/components/lab/BacktestChart.svelte"
+      ],
+      0.0
+    ],
+    [
+      "Почему кнопку перевода робота из бумаги в реал решили вообще не выводить на зеркало STL, а только на локальную страницу агента?",
+      [
+        "docs/superpowers/specs/2026-07-06-robot-tagging-and-gui-control-design.md"
+      ],
+      [
+        "stl:trader/api/quik_robots.py",
+        "stl:frontend/src/components/lab/AgentRobotScreen.svelte",
+        "stl:trader/lab/robot_stand.py"
+      ],
+      0.0
+    ]
+  ],
+  "cold_start_s": 0.2,
+  "first_query_s": 28.97,
+  "token_costs": {
+    "snippet": {
+      "tokens": 1294,
+      "chars": 4400,
+      "ms": 22723
+    },
+    "chunk": {
+      "tokens": 3038,
+      "chars": 10330,
+      "ms": 18661
+    },
+    "file": {
+      "tokens": 5096,
+      "chars": 17328,
+      "ms": 17885
+    },
+    "context": {
+      "tokens": 3332,
+      "chars": 11329,
+      "ms": 21047
+    }
+  },
+  "indexes": [
+    {
+      "index": "stl",
+      "files": 741,
+      "chunks": 6931,
+      "built_at": "2026-09-12 12:45:04",
+      "model": "intfloat/multilingual-e5-large",
+      "by_source": {
+        "stl": 741
+      }
+    },
+    {
+      "index": "fed",
+      "files": 66,
+      "chunks": 778,
+      "built_at": "2026-09-12 12:44:19",
+      "model": "intfloat/multilingual-e5-large",
+      "by_source": {
+        "fed": 66
+      }
+    }
+  ]
+}
