@@ -533,6 +533,7 @@
     "timeout_s": 30,
     "cache_ttl_s": 3600,
     "cache_max": 512,
-    "rate_per_min": 20
+    "rate_per_min": 20,
+    "profile": "fed"
   }
 }

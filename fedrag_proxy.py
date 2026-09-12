@@ -35,6 +35,13 @@ DEFAULT_CACHE_MAX = 512
 DEFAULT_RATE_PER_MIN = 20
 MAX_QUERY_LEN = 2000
 
+# Профиль поиска на стороне ragkit. Демон умеет искать по нескольким индексам сразу,
+# но Searcher штрафует всё, кроме первого индекса (secondary_penalty), а первым у него
+# стоит STL. Для вопросов про федерацию это давало чанки кода STL вместо канона:
+# замер 2026-09-12 — recall@1 0.20 и медиана 8.4с против 0.73 и 0.32с на профиле fed.
+# Старый демон лишние поля тела игнорирует, поэтому параметр безопасен и до обновления.
+DEFAULT_PROFILE = "fed"
+
 # Что агент видит, когда индекс недоступен: коротко и по делу, дальше он идёт в карточку.
 FALLBACK_TEXT = (
     "RAG федерации недоступен. Действуй по своей карточке агента, "
@@ -52,6 +59,7 @@ class FedRagProxy:
         self.cache_ttl_s: float = float(cfg.get("cache_ttl_s", DEFAULT_CACHE_TTL_S))
         self.cache_max: int = int(cfg.get("cache_max", DEFAULT_CACHE_MAX))
         self.rate_per_min: int = int(cfg.get("rate_per_min", DEFAULT_RATE_PER_MIN))
+        self.profile: str = cfg.get("profile", DEFAULT_PROFILE)
         self.enabled: bool = bool(cfg.get("enabled", True))
 
         # ключ -> (истекает, ответ)
@@ -138,7 +146,8 @@ class FedRagProxy:
             timeout = aiohttp.ClientTimeout(total=self.timeout_s)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
-                    self.url, json={"query": query, "depth": depth}
+                    self.url,
+                    json={"query": query, "depth": depth, "profile": self.profile},
                 ) as resp:
                     if resp.status != 200:
                         raise RuntimeError("ragkit ответил %d" % resp.status)
