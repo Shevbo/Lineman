@@ -525,5 +525,14 @@
     "gemini_full_access": [
       "ltx"
     ]
+  },
+  "fedrag": {
+    "_comment": "Индекс канона федерации (ragkit на sdev). Доступ через ssh-туннель PM2 fedrag-tunnel: демон слушает только loopback на своём узле.",
+    "enabled": true,
+    "url": "http://127.0.0.1:8791/search",
+    "timeout_s": 30,
+    "cache_ttl_s": 3600,
+    "cache_max": 512,
+    "rate_per_min": 20
   }
 }

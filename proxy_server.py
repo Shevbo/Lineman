@@ -34,6 +34,7 @@ from reverse_proxy import handle_reverse_proxy
 from circuit_breaker import CircuitBreaker
 import klod_ask
 from dedup_cache import DedupCache
+from fedrag_proxy import FedRagProxy
 from tg_miniapp import validate_init_data, user_id_allowed
 from backlog import BacklogStore, enqueue_builder_ticket
 from federation_registry import load_registry, resolve as resolve_repo
@@ -331,6 +332,10 @@ class ProxyServer:
         # Request dedup cache + retry analyzer
         self._dedup = DedupCache(self._config)
 
+        # Индекс fedrag на sdev: канон федерации по запросу вместо копии в каждой папке.
+        # Демон ragkit слушает только loopback на своём узле, Lineman — единственный вход.
+        self._fedrag = FedRagProxy(self._config)
+
         # Shectory Portal — единый каталог пользователей.
         # bridge: POST $SHECTORY_PORTAL_URL/api/internal/verify-portal-credentials
         # Bearer $SHECTORY_AUTH_BRIDGE_SECRET, body {email, password}.
@@ -554,6 +559,17 @@ class ProxyServer:
             # klod-access two-way inbox (specialised: file-backed, no openclaw cli)
             elif request_path_only.startswith("/api/agent/klod-access/"):
                 await self._raw_api_klod_access(rd, wr, request_path, method)
+                return
+
+            # Индекс федерации: агент спрашивает канон вместо чтения его целиком
+            elif request_path_only == "/api/fedrag/search":
+                await self._raw_api_fedrag_search(rd, wr, method)
+                return
+            elif request_path_only == "/api/fedrag/stats" and method == "GET":
+                await self._drain_headers(rd)
+                self._send_json_response(wr, 200, self._fedrag.stats())
+                await wr.drain()
+                wr.close()
                 return
 
             # Censor's daily top-offenders report
@@ -2174,6 +2190,64 @@ class ProxyServer:
             f"Content-Length: {len(resp_body)}\r\n\r\n".encode()
         )
         wr.write(resp_body)
+        await wr.drain()
+        wr.close()
+
+    async def _drain_headers(self, rd: asyncio.StreamReader) -> dict[str, str]:
+        """Дочитать заголовки до пустой строки и вернуть их в нижнем регистре."""
+        headers: dict[str, str] = {}
+        while True:
+            hdr = await asyncio.wait_for(rd.readline(), timeout=5)
+            if hdr in (b"\r\n", b"\n", b""):
+                break
+            decoded = hdr.decode("utf-8", errors="replace").strip()
+            if ": " in decoded:
+                k, v = decoded.split(": ", 1)
+                headers[k.lower()] = v
+        return headers
+
+    async def _raw_api_fedrag_search(
+        self,
+        rd: asyncio.StreamReader,
+        wr: asyncio.StreamWriter,
+        method: str,
+    ) -> None:
+        """POST /api/fedrag/search — запрос к индексу канона федерации на sdev.
+
+        Тело: {"query": "...", "depth": "snippet"}. Агент называет себя в X-Agent-Name,
+        по нему считается лимит. Недоступный индекс отдаётся как 200 с текстом
+        деградации: агент должен продолжить работу по карточке, а не встать.
+        """
+        headers = await self._drain_headers(rd)
+
+        if method != "POST":
+            self._send_json_error(wr, 405, "только POST")
+            await wr.drain()
+            wr.close()
+            return
+
+        content_length = int(headers.get("content-length", "0") or "0")
+        body_bytes = b""
+        if content_length > 0:
+            body_bytes = await asyncio.wait_for(
+                rd.read(min(content_length, 65536)), timeout=10
+            )
+
+        agent = (headers.get("x-agent-name")
+                 or headers.get("x-lineman-agent")
+                 or "unknown")
+        try:
+            payload = json.loads(body_bytes or b"{}")
+            query = payload.get("query", "")
+            depth = payload.get("depth", "snippet")
+        except (json.JSONDecodeError, AttributeError) as exc:
+            self._send_json_error(wr, 400, f"тело не разобрано: {exc}")
+            await wr.drain()
+            wr.close()
+            return
+
+        status, resp = await self._fedrag.search(query, depth=depth, agent=agent)
+        self._send_json_response(wr, status, resp)
         await wr.drain()
         wr.close()
 
