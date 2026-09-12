@@ -94,6 +94,15 @@
       "timeout": 15,
       "interval": 60,
       "proxy": true
+    },
+    {
+      "id": "fedrag",
+      "type": "fedrag",
+      "interval": 300,
+      "base_url": "http://127.0.0.1:8791",
+      "profile": "fed",
+      "name": "Индекс канона федерации (fedrag)",
+      "_comment": "Индекс канона федерации (ragkit на sdev) через ssh-туннель fedrag-tunnel. Без пробы падение индекса незаметно: Lineman отдаёт деградацию с кодом 200."
     }
   ],
   "routing": {

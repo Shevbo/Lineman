@@ -49,6 +49,21 @@ FALLBACK_TEXT = (
 )
 
 
+def _stale_body(payload: dict[str, Any], age_s: int) -> dict[str, Any]:
+    """Ответ из кэша с честной пометкой о возрасте.
+
+    Агент обязан видеть, что ответ не свежий: канон меняется редко, но решение
+    «удалить», «переключить», «выдать доступ» по устаревшему ответу может стоить дорого.
+    """
+    return {
+        "text": payload["text"],
+        "source": "stale",
+        "age_s": age_s,
+        "warning": ("Ответ из кэша, возраст %d мин: свежий индекс сейчас недоступен. "
+                    "Для необратимых действий сверься с первоисточником." % (age_s // 60)),
+    }
+
+
 class FedRagProxy:
     """Кэширующий прокси с лимитом на агента к демону ragkit."""
 
@@ -66,7 +81,7 @@ class FedRagProxy:
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
         # агент -> отметки времени запросов за последнюю минуту
         self._calls: dict[str, deque[float]] = {}
-        self._stats = {"hits": 0, "misses": 0, "errors": 0, "throttled": 0}
+        self._stats = {"hits": 0, "misses": 0, "errors": 0, "throttled": 0, "stale": 0}
 
     # ------------------------------------------------------------------ вспомогательное
     @staticmethod
@@ -75,14 +90,27 @@ class FedRagProxy:
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
     def _cache_get(self, key: str) -> dict[str, Any] | None:
+        """Свежая запись или None. Протухшую НЕ удаляем — она нужна как аварийный запас."""
         hit = self._cache.get(key)
         if not hit:
             return None
         expires, payload = hit
         if expires < time.time():
-            self._cache.pop(key, None)
             return None
         return payload
+
+    def _cache_get_stale(self, key: str) -> tuple[dict[str, Any], int] | None:
+        """Протухшая запись и её возраст в секундах.
+
+        Во время аварии ответ по канону трёхчасовой давности несравнимо полезнее,
+        чем «индекс недоступен»: канон меняется раз в сутки, а не ежеминутно.
+        """
+        hit = self._cache.get(key)
+        if not hit:
+            return None
+        expires, payload = hit
+        age = int(time.time() - (expires - self.cache_ttl_s))
+        return payload, age
 
     def _cache_put(self, key: str, payload: dict[str, Any]) -> None:
         if len(self._cache) >= self.cache_max:
@@ -135,6 +163,13 @@ class FedRagProxy:
         if self._throttled(agent):
             self._stats["throttled"] += 1
             log.warning("fedrag_throttled", agent=agent, limit=self.rate_per_min)
+            # Упёрлись в лимит — но если ответ на этот вопрос уже лежит, отдать его
+            # дешевле и полезнее отказа: он не ходит в сеть и не занимает демон.
+            stale = self._cache_get_stale(key)
+            if stale is not None:
+                payload, age = stale
+                self._stats["stale"] += 1
+                return 200, dict(_stale_body(payload, age), throttled=True)
             return 429, {
                 "error": "слишком часто, лимит %d запросов в минуту" % self.rate_per_min,
                 "retry_after": 60,
@@ -164,6 +199,12 @@ class FedRagProxy:
                 error=str(exc),
                 latency_ms=int((time.monotonic() - started) * 1000),
             )
+            stale = self._cache_get_stale(key)
+            if stale is not None:
+                payload, age = stale
+                self._stats["stale"] += 1
+                log.info("fedrag_stale_served", agent=agent, age_s=age)
+                return 200, _stale_body(payload, age)
             return 200, {"text": FALLBACK_TEXT, "source": "fallback", "error": str(exc)}
 
         latency_ms = int((time.monotonic() - started) * 1000)

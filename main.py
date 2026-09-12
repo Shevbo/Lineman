@@ -25,6 +25,7 @@ import structlog
 
 from checks import (
     check_deepseek,
+    check_fedrag,
     check_gemini,
     check_google_calendar,
     check_google_drive,
@@ -119,6 +120,7 @@ def build_client(use_proxy: bool, proxy_url: str, timeout: int) -> httpx.AsyncCl
 
 CHECK_DISPATCH = {
     "deepseek": check_deepseek,
+    "fedrag": check_fedrag,
     "gemini": check_gemini,
     "google_drive": check_google_drive,
     "google_gmail": check_google_gmail,
@@ -190,7 +192,9 @@ async def run_check(
                 svc.get("openclaw_config_path", ""),
             )
 
-        if not api_key and svc_type not in ("google_drive", "google_gmail", "google_calendar", "openai"):
+        # fedrag — внутренний индекс за ssh-туннелем, ключа у него нет и быть не должно.
+        if not api_key and svc_type not in ("google_drive", "google_gmail",
+                                            "google_calendar", "openai", "fedrag"):
             logger.warning("no_api_key", service=svc_id)
             return {"online": False, "error": "no API key configured"}
 
@@ -202,6 +206,9 @@ async def run_check(
         if svc_type == "openai":
             kwargs["base_url"] = svc.get("base_url", "")
             kwargs["health_endpoint"] = svc.get("health_endpoint", "/v1/models")
+        if svc_type == "fedrag":
+            kwargs["base_url"] = svc.get("base_url", "http://127.0.0.1:8791")
+            kwargs["profile"] = svc.get("profile", "fed")
 
         result = await _call_with_retry(check_fn, client, kwargs)
 

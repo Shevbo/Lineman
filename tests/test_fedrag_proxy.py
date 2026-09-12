@@ -194,3 +194,96 @@ def _patch_upstream(proxy, monkeypatch, fake):
 
     monkeypatch.setattr(mod.aiohttp, "ClientSession",
                         lambda *a, **kw: _Session(), raising=False)
+
+
+# ------------------------------------------------- аварийный запас: устаревший кэш
+def _age_cache(proxy, seconds):
+    """Состарить записи кэша.
+
+    Менять cache_ttl_s постфактум бесполезно: срок годности записи фиксируется
+    в момент вставки, поэтому двигаем именно его.
+    """
+    for k, (expires, payload) in list(proxy._cache.items()):
+        proxy._cache[k] = (expires - seconds, payload)
+
+
+
+def test_при_отказе_индекса_отдаётся_устаревший_кэш(proxy, monkeypatch):
+    """Ответ часовой давности по канону полезнее, чем «индекс недоступен».
+
+    Канон федерации меняется раз в сутки, а не ежеминутно, поэтому устаревший ответ
+    почти всегда остаётся верным. Пустой фолбэк оставляет агента вообще без знаний.
+    """
+    state = {"fail": False}
+
+    async def flaky(query, depth, agent):
+        if state["fail"]:
+            raise OSError("sdev недоступен")
+        return {"text": "секрет запрашивается у Ключника через approval-flow"}
+
+    _patch_upstream(proxy, monkeypatch, flaky)
+
+    run(proxy.search("как получить секрет", agent="eshkola"))      # наполнили кэш
+    _age_cache(proxy, 7200)                                        # прошло два часа
+    state["fail"] = True
+
+    status, body = run(proxy.search("как получить секрет", agent="eshkola"))
+    assert status == 200
+    assert body["source"] == "stale"
+    assert "approval-flow" in body["text"], "должен прийти прежний ответ, а не заглушка"
+    assert "возраст" in body["warning"], "агент обязан видеть, что ответ не свежий"
+
+
+def test_без_кэша_при_отказе_остаётся_текст_деградации(proxy, monkeypatch):
+    async def boom(query, depth, agent):
+        raise OSError("sdev недоступен")
+
+    _patch_upstream(proxy, monkeypatch, boom)
+    status, body = run(proxy.search("вопрос которого не было", agent="eshkola"))
+    assert status == 200
+    assert body["source"] == "fallback"
+    assert body["text"] == FALLBACK_TEXT
+
+
+def test_на_лимите_отдаётся_кэш_вместо_отказа(proxy, monkeypatch):
+    """429 агенту, которому мы можем ответить бесплатно, — это отказ без причины."""
+    async def fake(query, depth, agent):
+        return {"text": "ответ про эскалацию"}
+
+    _patch_upstream(proxy, monkeypatch, fake)
+
+    run(proxy.search("порядок эскалации", agent="шумный"))
+    _age_cache(proxy, 7200)
+    for i in range(3):                                   # выбираем лимит новыми запросами
+        run(proxy.search("иной вопрос %d" % i, agent="шумный"))
+
+    status, body = run(proxy.search("порядок эскалации", agent="шумный"))
+    assert status == 200, "на известный вопрос отвечаем даже за лимитом"
+    assert body["source"] == "stale"
+    assert body["throttled"] is True
+    assert "ответ про эскалацию" in body["text"]
+
+
+def test_неизвестный_вопрос_за_лимитом_всё_равно_отбивается(proxy, monkeypatch):
+    """Иначе лимит перестаёт защищать демон, ради которого он и введён."""
+    async def fake(query, depth, agent):
+        return {"text": "ответ"}
+
+    _patch_upstream(proxy, monkeypatch, fake)
+    for i in range(3):
+        run(proxy.search("вопрос %d" % i, agent="шумный"))
+
+    status, body = run(proxy.search("ничего похожего раньше не спрашивали", agent="шумный"))
+    assert status == 429
+    assert body["retry_after"] == 60
+
+
+def test_свежий_кэш_не_помечается_устаревшим(proxy, monkeypatch):
+    async def fake(query, depth, agent):
+        return {"text": "ответ"}
+
+    _patch_upstream(proxy, monkeypatch, fake)
+    run(proxy.search("вопрос", agent="a"))
+    status, body = run(proxy.search("вопрос", agent="a"))
+    assert body["source"] == "cache"
+    assert "warning" not in body
