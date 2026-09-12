@@ -304,7 +304,27 @@ class ProxyPool:
 
     def _is_tripped(self, proxy_id: str, host: str) -> bool:
         circuit = self._host_circuits.get((proxy_id, host))
-        return circuit is not None and circuit.tripped_at > 0
+        if circuit is None or circuit.tripped_at == 0:
+            return False
+
+        # Восстановление проверяется ЗДЕСЬ, а не только в _record_host.
+        # Инцидент 2026-09-12 (eschool-bot, api.telegram.org): после пробоя весь
+        # трафик уходит на direct, а record() для proxy_id == "direct" выходит
+        # первой же строкой. Записей по паре (прокси, хост) больше не поступает,
+        # поэтому таймер восстановления внутри _record_host не срабатывал никогда —
+        # прокси оставался заблокирован для хоста до перезапуска Lineman.
+        if (time.monotonic() - circuit.tripped_at) > self._cb_recovery:
+            logger.info(
+                "host_circuit_reset",
+                proxy=proxy_id,
+                host=host,
+                reason="recovery_elapsed",
+            )
+            circuit.tripped_at = 0.0
+            circuit.window.clear()
+            circuit.alerted = False
+            return False
+        return True
 
     def _is_alert_suppressed(self, host: str) -> bool:
         """Шлём TG-алерт ТОЛЬКО для известных федерации апстримов.
