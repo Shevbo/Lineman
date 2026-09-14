@@ -549,6 +549,128 @@ async def _kimi_api_key(session: aiohttp.ClientSession) -> str:
     return value
 
 
+# --- OpenRouter — per-consumer 1h TTL grant (Боря 2026-09-09) --------------
+# Lineman держит единственный OPENROUTER_API_KEY (как Kimi/DeepSeek), клиенты
+# ключ не видят. Но, в отличие от Kimi, каждый агент-потребитель обязан
+# получить явное ОК Бори в Ключнике на ДОСТУП, а не запросить сам ключ —
+# и это окно доступа живёт ровно 1 час, не продлевается автоматически.
+# По истечении часа следующий вызов снова спрашивает Борю (свежий req_id,
+# т.к. requester в Ключнике меняется на новый epoch — Guard 0 keymaster.py
+# иначе переиздавал бы delivery навечно после первого одобрения).
+_openrouter_key_cache: dict[str, Any] = {"value": "", "checked_at": 0.0}
+_OPENROUTER_KEY_RECHECK_S = 60.0
+_OPENROUTER_GRANTS_FILE = _Path.home() / ".cache" / "lineman-openrouter-grants.json"
+_OPENROUTER_GRANT_TTL_S = 3600.0
+
+
+async def _openrouter_api_key(session: aiohttp.ClientSession) -> str:
+    """Мастер-ключ OpenRouter. Lineman стоит pre_approved в Ключнике
+    (requester=lineman@smain) — это инфраструктурный доступ самого Lineman,
+    отдельный от 1ч-грантов агентов-потребителей ниже."""
+    env_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if env_key:
+        return env_key
+    if _openrouter_key_cache["value"]:
+        return _openrouter_key_cache["value"]
+    now = time.time()
+    if now - _openrouter_key_cache["checked_at"] < _OPENROUTER_KEY_RECHECK_S:
+        return ""
+    _openrouter_key_cache["checked_at"] = now
+    try:
+        async with session.post(
+            _KIMI_KEYMASTER_URL,
+            params={"name": "OPENROUTER_API_KEY", "requester": "lineman@smain",
+                    "purpose": "openrouter-routing"},
+            timeout=aiohttp.ClientTimeout(total=8),
+        ) as resp:
+            data = await resp.json()
+    except Exception:
+        logger.exception("openrouter_key_request_failed")
+        return ""
+    if data.get("status") != "approved":
+        logger.warning("openrouter_key_not_approved", status=data.get("status"))
+        return ""
+    delivery = str(data.get("delivery") or "")
+    if delivery.startswith("~"):
+        delivery = os.path.expanduser(delivery)
+    try:
+        with open(delivery) as f:
+            value = f.read().strip()
+    except Exception:
+        logger.exception("openrouter_key_delivery_read_failed", delivery=delivery[:60])
+        return ""
+    if value:
+        _openrouter_key_cache["value"] = value
+    return value
+
+
+def _load_openrouter_grants() -> dict[str, Any]:
+    try:
+        return json.loads(_OPENROUTER_GRANTS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _save_openrouter_grants(grants: dict[str, Any]) -> None:
+    try:
+        _OPENROUTER_GRANTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _OPENROUTER_GRANTS_FILE.write_text(json.dumps(grants))
+    except Exception:
+        logger.exception("openrouter_grants_save_failed")
+
+
+async def _openrouter_consumer_grant(session: aiohttp.ClientSession, agent: str) -> dict[str, Any]:
+    """Проверяет/запрашивает 1ч-окно доступа для КОНКРЕТНОГО агента-потребителя.
+
+    Локальный TTL живёт в Lineman (Ключник не умеет истекать одобрения —
+    Guard 0 переиздаёт delivery навечно). Когда локальный грант просрочен и
+    ПРЕЖДЕ был approved, epoch увеличивается — новый requester-id заставляет
+    Ключник завести настоящий новый pending и заново дёрнуть Борю в TG.
+    Пока грант pending/denied — epoch не трогаем, дедуп/cooldown берёт на
+    себя сам Ключник (Guard 1/2)."""
+    agent = agent or "unknown"
+    grants = _load_openrouter_grants()
+    now = time.time()
+    g = grants.get(agent) or {"epoch": 0, "expires_at": 0.0, "status": "new"}
+    if g.get("expires_at", 0) > now:
+        return {"ok": True}
+    if g.get("status") == "approved":
+        g["epoch"] = int(g.get("epoch", 0)) + 1
+        g["status"] = "requesting"
+    requester = f"openrouter-consumer:{agent}:{g['epoch']}"
+    try:
+        async with session.post(
+            _KIMI_KEYMASTER_URL,
+            params={"name": "OPENROUTER_ACCESS_OK", "requester": requester,
+                    "purpose": f"OpenRouter доступ на 1ч для агента {agent}"},
+            timeout=aiohttp.ClientTimeout(total=8),
+        ) as resp:
+            data = await resp.json()
+    except Exception:
+        logger.exception("openrouter_grant_request_failed", agent=agent)
+        return {"ok": False, "message": "Ключник недоступен — повтори чуть позже."}
+    status = data.get("status")
+    if status == "approved":
+        g["expires_at"] = now + _OPENROUTER_GRANT_TTL_S
+        g["status"] = "approved"
+        grants[agent] = g
+        _save_openrouter_grants(grants)
+        return {"ok": True}
+    if status == "denied":
+        g["status"] = "denied"
+        grants[agent] = g
+        _save_openrouter_grants(grants)
+        return {"ok": False, "message": (
+            "Боря отклонил доступ к OpenRouter для этого агента. "
+            "Повтори не раньше чем через 24ч.")}
+    g["status"] = "pending"
+    grants[agent] = g
+    _save_openrouter_grants(grants)
+    return {"ok": False, "message": (
+        "Жду ОК Бори в Ключнике на доступ к OpenRouter (окно 1ч на агента). "
+        "Повтори запрос через минуту.")}
+
+
 def _strip_query_key(url: str) -> str:
     """Срезать любой клиентский key=... из query — Lineman поставит свой эксклюзивный."""
     if "key=" not in url:
@@ -564,6 +686,26 @@ def _drop_client_google_creds(headers: dict[str, str]) -> None:
     """Убрать клиентский google-ключ из заголовков (любой регистр) — ключ только у Lineman."""
     for hk in [k for k in headers if k.lower() == "x-goog-api-key"]:
         headers.pop(hk, None)
+
+
+def _inject_deepseek_key(headers: dict[str, str], lineman_key: str) -> str:
+    """Поставить ключ Lineman в Authorization для DeepSeek, срезав клиентский.
+
+    Раньше ключ подставлялся, только если клиент не прислал своего. Агенты openclaw
+    (guilya, titan, virtual-boris) слали сырой протухший ключ, Lineman пропускал его
+    насквозь — 113 ответов 401 за 3 дня при рабочем ключе Lineman: все 401 были
+    с клиентским ключом, все 200 без него (2026-09-14). Политика §2: ключ провайдера
+    держит только Lineman, как уже сделано для Google.
+
+    Без ключа Lineman клиентский заголовок не трогаем: срезать его значило бы
+    гарантировать 401 вместо возможного успеха.
+    """
+    if not lineman_key:
+        return "no-lineman-key"
+    for hk in [k for k in headers if k.lower() == "authorization"]:
+        headers.pop(hk, None)
+    headers["authorization"] = f"Bearer {lineman_key}"
+    return "injected"
 
 
 async def _handle_passthrough(
@@ -1079,11 +1221,10 @@ async def handle_reverse_proxy(
             sep = "&" if "?" in upstream_url else "?"
             upstream_url = upstream_url + sep + "key=" + gkey
 
-    # Inject DeepSeek API key if not already in Authorization header
-    if provider == "deepseek" and "authorization" not in {k.lower() for k in fwd_headers}:
-        ds_key = os.environ.get("DEEPSEEK_API_KEY", "")
-        if ds_key:
-            fwd_headers["authorization"] = f"Bearer {ds_key}"
+    # DeepSeek: ключ держит только Lineman — клиентский Authorization срезается всегда.
+    # См. _inject_deepseek_key: сырые протухшие ключи агентов давали 401.
+    if provider == "deepseek":
+        _inject_deepseek_key(fwd_headers, os.environ.get("DEEPSEEK_API_KEY", ""))
 
     # Kimi (Moonshot): "kimi" — нативный OpenAI-подобный /v1 (Bearer),
     # "kimi-anthropic" — Anthropic-совместимый /anthropic (x-api-key + anthropic-version).
@@ -1103,6 +1244,32 @@ async def handle_reverse_proxy(
                 fwd_headers.setdefault("anthropic-version", "2023-06-01")
             else:
                 fwd_headers["authorization"] = f"Bearer {kimi_key}"
+
+    # OpenRouter: Lineman — единственный держатель OPENROUTER_API_KEY, но
+    # доступ САМОГО агента-потребителя гейтится отдельным 1ч-грантом Бори
+    # (не выдача ключа, а окно доступа per-agent, см. _openrouter_consumer_grant).
+    if provider == "openrouter":
+        _fwd_keys_lower = {k.lower() for k in fwd_headers}
+        if "authorization" not in _fwd_keys_lower:
+            if not agent_name:
+                await _send_json_error(
+                    writer, 400,
+                    "OpenRouter требует X-Agent-Name — доступ выдаётся конкретному "
+                    "потребителю на 1 час, анонимные вызовы не поддерживаются.")
+                return
+            grant = await _openrouter_consumer_grant(session, agent_name)
+            if not grant.get("ok"):
+                await _send_json_error(writer, 503, grant.get("message")
+                                        or "OpenRouter: доступ не выдан.")
+                return
+            or_key = await _openrouter_api_key(session)
+            if not or_key:
+                await _send_json_error(
+                    writer, 503,
+                    "OpenRouter API key недоступен в Keymaster (нужен pre_approved "
+                    "для requester=lineman@smain) — обратись к klod-access.")
+                return
+            fwd_headers["authorization"] = f"Bearer {or_key}"
 
     # Proxy pool selection
     use_proxy: str | None = None

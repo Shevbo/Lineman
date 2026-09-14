@@ -216,6 +216,31 @@ class ProxyServer:
         "/api/gemini-pro",
     )
 
+    # Эндпоинты, которые диспетчер обслуживает только одним методом. Нужны, чтобы
+    # на «не тот» метод отвечать 405 с подсказкой, а не проваливаться в форвард-прокси.
+    # Держать в согласии с веткой elif ... and method == "..." в _raw_handler.
+    _METHOD_RESTRICTED_API = {
+        "/api/pool/stats": "GET",
+        "/api/pool/hitparade": "GET",
+        "/api/log/stats": "GET",
+        "/api/signal": "POST",
+        "/api/tg/send": "POST",
+        "/api/sms/message": "POST",
+        "/api/fedrag/stats": "GET",
+        "/api/keymaster/leak_alert": "POST",
+        "/api/login": "POST",
+        "/api/tg/miniapp-auth": "POST",
+        "/api/logout": "POST",
+        "/logout": "POST",
+        "/api/search": "GET",
+        "/api/youtube": "GET",
+        "/api/build": "POST",
+        "/api/builder/answer": "POST",
+        "/api/klod/models": "GET",
+        "/api/klod/tts": "POST",
+        "/api/klod/ask": "POST",
+    }
+
     def _is_admin_allowed(self, source_ip: str) -> bool:
         """True если source_ip из доверенной сети (loopback, WG, Tailscale, docker)."""
         if not source_ip:
@@ -254,6 +279,24 @@ class ProxyServer:
             if path == pref or path.startswith(pref + "/") or path.startswith(pref + "?"):
                 return False
         return path.startswith("/api/") or path == "/metrics" or path == "/state"
+
+    def _unrouted_response(self, method: str, path: str) -> tuple[int, dict[str, Any]]:
+        """Ответ на относительный путь, который не узнала ни одна ветка диспетчера.
+
+        405 — путь есть, но обслуживается другим методом; 404 — пути нет вовсе.
+        Раньше такой запрос уходил в handle_http и возвращал «Proxy error» 502:
+        GET на POST-only /api/tg/send выглядел как лежащий API (письмо omniroute,
+        2026-09-14).
+        """
+        allowed = self._METHOD_RESTRICTED_API.get(path)
+        if allowed and allowed != method:
+            return 405, {
+                "error": "method not allowed",
+                "path": path,
+                "method": method,
+                "allowed_method": allowed,
+            }
+        return 404, {"error": "route not found", "path": path, "method": method}
 
     def _is_forward_proxy(self, method: str, request_path: str) -> bool:
         """True если это forward-proxy запрос (CONNECT-туннель или absolute-URI HTTP).
@@ -839,6 +882,17 @@ class ProxyServer:
                         request_path, rd, wr, self._config,
                         db=self._db, source_ip=source_ip, pool=self._pool,
                     )
+                return
+
+            # Относительный путь без своей ветки — это не запрос форвард-прокси: у того
+            # всегда абсолютный URI. Отвечаем 404/405 сами, а не отдаём в handle_http,
+            # где он превращался во вводящий в заблуждение «Proxy error» 502.
+            if not self._is_forward_proxy(method, request_path):
+                await self._drain_headers(rd)
+                status, body = self._unrouted_response(method, request_path_only)
+                self._send_json_response(wr, status, body)
+                await wr.drain()
+                wr.close()
                 return
 
             # HTTP proxy

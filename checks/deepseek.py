@@ -14,6 +14,17 @@ DEEPSEEK_HEALTH_URL = "https://api.deepseek.com/v1/models"
 DEEPSEEK_CHAT_URL = "https://api.deepseek.com/v1/chat/completions"
 
 
+def _exc_text(exc: BaseException) -> str:
+    """Тип исключения плюс текст, если он есть.
+
+    У httpx.ReadTimeout текст пустой, и проба писала «probe error: » без единой
+    зацепки: deepseek-flash лежал сутками, а причина — таймаут на стороне DeepSeek —
+    из лога не читалась (2026-09-14).
+    """
+    text = str(exc)
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
 async def check_deepseek(
     client: httpx.AsyncClient,
     api_key: str,
@@ -70,7 +81,7 @@ async def check_deepseek(
     except httpx.ProxyError:
         result["error"] = "proxy error"
     except Exception as exc:
-        result["error"] = f"unexpected: {exc}"
+        result["error"] = f"unexpected: {_exc_text(exc)}"
         logger.exception("check_deepseek_failed", model=model, error=str(exc))
 
     return result
@@ -121,5 +132,5 @@ async def _deep_probe_deepseek(
         return {
             "online": False,
             "latency_ms": 0.0,
-            "error": f"probe error: {exc}",
+            "error": f"probe error: {_exc_text(exc)}",
         }
