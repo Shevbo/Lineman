@@ -133,3 +133,17 @@ sudo systemctl reload nginx      # перезагрузка
 ## Утренняя перекличка (2026-07-03)
 
 `scripts/klod_rollcall.py` — cron 08:30, дополняет klod_sentry (*/5). Проверяет ядро Клода, PM2, systemd-юниты, отвеченность inbox klod-access, активность агентов за 24ч, hoster. Замерших чинит рестартом (диспетчер — только если не пытается отвечать по dispatch_actions.jsonl). Сводка Боре в TG, история: ~/logs/klod/rollcall.jsonl.
+
+
+## vibe запаркован (2026-09-14)
+
+Решение Бориса: vibe (Windows PC) запаркован надолго. Туннель `vibe-tunnel` в PM2
+остановлен и сохранён остановленным (`pm2 save`) — после рестарта PM2 не поднимется.
+До этого он минимум с 2026-09-12 падал ~2400 раз в сутки: Pi отвечал `No route to host`
+до `192.168.1.64`. Скрипт `~/scripts/vibe-tunnel.sh` не удалён.
+
+Вернуть: `pm2 start vibe-tunnel && pm2 save`, предварительно убедиться, что vibe отвечает
+в LAN (с Pi: `ping 192.168.1.64`).
+
+Агенты с Windows без WireGuard ходят в Lineman через `klod_http.sh` из скилла
+онбординга (ssh-jump на Pi), а не через этот туннель.

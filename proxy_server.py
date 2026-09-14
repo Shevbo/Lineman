@@ -1722,6 +1722,30 @@ class ProxyServer:
         )
         wr.write(body)
 
+    def _tg_account_allowed(self, account: str, agent: str) -> tuple[bool, str]:
+        """Вправе ли агент писать от бота account. Возврат: (разрешено, причина).
+
+        Аккаунт, которого нет в tg_send.account_agents, открыт — это прежнее поведение,
+        сохранённое, пока по журналу tg_send_request не станет ясно, кто им пользуется.
+        Для закрытого аккаунта нужен X-Agent-Name из списка. Имя агента — заявленное,
+        а не доказанное; защищает от ошибки и чужого бота по недосмотру, не от злого
+        умысла внутри доверенной сети (её держит IP-барьер /api/*).
+        """
+        acl = (self._config.get("tg_send") or {}).get("account_agents") or {}
+        if account not in acl:
+            return True, "unrestricted"
+        allowed = acl.get(account) or []
+        if agent and agent in allowed:
+            return True, "allowed"
+        return False, (
+            f"агент {agent or '<без X-Agent-Name>'} не вправе писать от бота {account}; "
+            f"разрешены: {', '.join(allowed) or 'никто'}"
+        )
+
+    def _default_tg_chat_id(self) -> str:
+        """Чат Бори по умолчанию — единая точка вместо дублей по месту вызова."""
+        return os.environ.get("BORIS_TG_CHAT_ID", "36910539")
+
     def _tg_resolve_token(self, account: str) -> tuple[str, bool]:
         """Токен бота для account. Возврат: (token, config_ok).
 
@@ -1790,15 +1814,30 @@ class ProxyServer:
             return
 
         account = req.get("account", "default")
-        chat_id = str(req.get("chat_id", ""))
+        # chat_id можно опустить — тогда пишем Боре, как и обещает §6 канона. До 2026-09-14
+        # код отвечал на это 400, хотя канон разрешал.
+        chat_id = str(req.get("chat_id") or self._default_tg_chat_id())
         text = req.get("text", "")
         parse_mode = req.get("parse_mode", "")
         # Опциональный inline-keyboard (Telegram API формат). Используется Ключником
         # для approve/deny кнопок Бори вместо текстовых кодов 'ОК <id>'/'DENY <id>'.
         reply_markup = req.get("reply_markup")
 
-        if not chat_id or not text:
-            self._send_json_response(wr, 400, {"ok": False, "error": "chat_id and text required"})
+        if not text:
+            self._send_json_response(wr, 400, {"ok": False, "error": "text required"})
+            await wr.drain()
+            wr.close()
+            return
+
+        # Кто вправе писать от какого бота. До 2026-09-14 не проверялось вовсе: любой
+        # доверенный вызывающий слал от любого из ботов openclaw. Закрыты аккаунты из
+        # config.json -> tg_send.account_agents; остальные пока открыты, но каждая
+        # отправка журналируется — по этим данным закрываются следующие боты.
+        agent = headers.get("x-agent-name") or headers.get("x-lineman-agent") or ""
+        allowed, reason = self._tg_account_allowed(account, agent)
+        logger.info("tg_send_request", account=account, agent=agent or "-", allowed=allowed)
+        if not allowed:
+            self._send_json_response(wr, 403, {"ok": False, "error": reason})
             await wr.drain()
             wr.close()
             return
@@ -3271,7 +3310,7 @@ class ProxyServer:
             pass
         text = (f"Клод-Доступ: завершил OPS от {agent or 'агента'} — "
                 f"«{title}». Тикет #{bid} → done.")
-        chat_id = os.environ.get("BORIS_TG_CHAT_ID", "36910539")
+        chat_id = self._default_tg_chat_id()
         try:
             if self._upstream_session is None:
                 return

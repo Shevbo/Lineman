@@ -545,5 +545,14 @@
     "cache_max": 512,
     "rate_per_min": 20,
     "profile": "fed"
+  },
+  "tg_send": {
+    "_comment": "Кто вправе писать от какого бота через /api/tg/send (по X-Agent-Name). Аккаунты вне списка пока открыты, каждая отправка журналируется (tg_send_request) — по данным закрываются следующие. 2026-09-14: virtual-boris — владелец и omniroute (блог Бориса, решение Бориса).",
+    "account_agents": {
+      "virtual-boris": [
+        "virtual-boris",
+        "omniroute"
+      ]
+    }
   }
 }

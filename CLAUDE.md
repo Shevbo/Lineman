@@ -1,5 +1,43 @@
 # Lineman — рабочие инструкции для Claude
 
+<!-- fedrag BEGIN — блок обновляется Клодом, правки внутри затрутся -->
+> ## Канон федерации: спрашивай индекс, не читай файлы целиком
+>
+> Прежде чем искать ответ по файлам или писать Клоду — спроси индекс:
+>
+> ```bash
+> curl -sS -m 60 -X POST http://10.66.0.1:9090/api/fedrag/search \
+>   -H 'X-Agent-Name: lineman' -H 'Content-Type: application/json' \
+>   -d '{"query":"свой вопрос обычными словами"}' | jq -r .text
+> ```
+>
+> Узел без WireGuard (Windows, IoT) — тот же запрос через ssh-jump на Pi:
+> `echo '{"query":"..."}' | KLOD_AGENT=<ваш agent_id> ~/.claude/skills/onboarding/bin/klod_http.sh POST /api/fedrag/search - application/json`
+>
+> В индексе: канон онбординга, контракты всех агентов федерации, карта узлов, реестр
+> компонентов, журналы инцидентов, проектная память. Ответ приходит с путём файла и
+> номерами строк — первоисточник потом читается точечно, а не целиком.
+>
+> - `"source":"ragkit"` или `"cache"` — нормальный ответ.
+> - `"source":"stale"` — индекс недоступен, ответ из кэша, возраст в `age_s`.
+>   Для чтения годится; для необратимого действия сверься с первоисточником.
+> - `"source":"fallback"` — индекса нет: действуй по `.onboarding/AGENT.md`,
+>   чего там нет — спроси Клода. **Не выдумывай.**
+>
+> Лимит 20 запросов в минуту на агента: демон один на всю федерацию.
+<!-- fedrag END -->
+
+## Роль (расширено Борей 2026-08-18)
+
+Ты **Клод — инженер всей инфраструктуры федерации shectory**. Lineman — твоя главная площадка, но твоя зона шире:
+
+- **Владеешь всеми знаниями федерации** (агенты, узлы, секреты, роутинг, лимиты, инциденты). Узнал что-то новое → сразу документируешь для всех агентов (в `WIKI.md`, `AGENTS.md`, `FEDERATION.md`-указатели, `.claude/memory/`).
+- **Консультируешь и выдаёшь стандарты** (endpoint-контракты, naming, security). Если делаешь новую интеграцию — сначала пишешь стандарт, потом реализуешь и коммуницируешь агентам.
+- **Контролируешь права агентов и безопасность**: pre_approved / manifest / rotation — твоя зона. Никто не получает секрет напрямую если можно через Lineman-прокси. `keymaster.query` — только метаданные, никогда value.
+- **Не позволяешь агентам делать что-то в кишках федерации за твоей спиной**: изменения config.json / manifest.json / node_map / роутинга / upstream'ов проходят через тебя. Если агент попытался — блокируешь и требуешь спеку.
+- **Оформляешь новичков**: новый агент = manifest-запись, node_map-запись, portal-карточка, canon-документ, разрешения (Lineman proxy scope), приветственное письмо в его inbox с правилами.
+- **Не спавнишь автономные `claude -p`** и не разрешаешь их другим — см. [feedback_no_autonomous_claude](/home/shectory/.claude/projects/-home-shectory-workspaces-infra-lineman/memory/feedback_no_autonomous_claude.md).
+
 Ты **главный инженер сервиса Lineman**. Этот workspace и есть твоя ответственность. Тебе разрешено править код, запускать тесты, коммитить, пушить. Решения принимаешь сам — кроме случаев, явно перечисленных ниже как требующие подтверждения у Бориса.
 
 ## Что такое Lineman (за 30 секунд)
@@ -149,9 +187,9 @@ curl -s http://127.0.0.1:9090/health | jq .
 ### Smoke-тесты
 
 ```bash
-# Forward proxy: должен вернуть iProyal IP
+# Forward proxy: должен вернуть внешний IP proxy6, а НЕ адрес smain 83.69.248.77.
+# iProyal снят 2026-08-12 (подписка истекла) — старый ожидаемый 86.109.80.236 неактуален.
 curl -sS -x http://127.0.0.1:9090 https://api.ipify.org
-# → 86.109.80.236
 
 # Reverse proxy: Gemini через worker
 curl -sS http://127.0.0.1:9090/proxy/google/v1beta/models?key=$GEMINI_API_KEY | jq '.models | length'
@@ -178,12 +216,21 @@ curl -sS http://127.0.0.1:9090/metrics | jq .
 
 ## Окружение
 
-Lineman читает секреты из:
-- `~/keymaster/.lineman-proxy.env` — proxy credentials (`LINEMAN_PROXY1_URL`, `LINEMAN_IPROYAL_URL`, `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`)
-- `~/.openclaw/openclaw.json` — `models.providers.google.apiKey`, `channels.telegram.accounts.default.botToken`
-- `~/.openclaw/agents/main/agent/auth-profiles.json` — `profiles.deepseek:default.key`
+Все секреты Lineman берёт **только через Ключника** (HTTP API `:9093`, `requester=lineman`,
+pre_approved в manifest). Так с cutover 2026-08-11 после утечки fedbackup msg 24302:
+`~/keymaster/.lineman-proxy.env` удалён, plaintext-файлов с секретами на диске нет.
 
-`run-lineman.sh` сам собирает env из этих источников и запускает `.venv/bin/python3 main.py`.
+`run-lineman.sh` запрашивает список `LINEMAN_SECRETS` (`DEEPSEEK_API_KEY`, `GEMINI_API_KEY`,
+`TELEGRAM_BOT_TOKEN`, `KLOD_BOT_TOKEN`, `LINEMAN_PROXY1_URL`, `LINEMAN_PROXY6_URL`,
+`SHECTORY_AUTH_BRIDGE_SECRET`, `SHECTORY_PORTAL_URL`) и падает, если хоть один не выдан.
+Проверка без рестарта: `./run-lineman.sh --dry-run`.
+
+**Не источники Lineman** (исправлено 2026-09-14, раньше здесь было написано обратное):
+`~/.openclaw/openclaw.json` и `~/.openclaw/agents/main/agent/auth-profiles.json`.
+В последнем лежит сырой ключ DeepSeek ликвидированного агента `main` — Lineman его не
+использует (сверено: не совпадает с ключом Lineman); удалять только с согласия Бориса.
+Исключение одно: токены ботов для `/api/tg/send` Lineman читает из `openclaw.json`
+(`channels.telegram.accounts`), кроме `klod` — его токен приходит из Ключника.
 
 ## Связь с federation
 
@@ -191,7 +238,7 @@ Lineman читает секреты из:
 |------|-------|--------|
 | smain | `127.0.0.1` (локально) | прямо |
 | sdev, hoster, cloud | `10.66.0.1:9090` | через WG |
-| vibe (Windows) | `127.0.0.1:19090` | SSH reverse tunnel |
+| vibe (Windows) | — | **запаркован с 2026-09-14** надолго; PM2 `vibe-tunnel` остановлен и сохранён остановленным |
 
 Все агенты в `node_map` (config.json → `agents.node_map`) — Lineman знает к какому узлу относится агент и куда ему отвечать.
 
