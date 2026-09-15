@@ -1,5 +1,40 @@
 # Журнал инцидентов Lineman
 
+## 2026-09-15 — Расползание секретов в ~/.openclaw: зачистка (решения Бориса)
+
+Нашлось при удалении сырого ключа DeepSeek агента `main`.
+
+**`~/.openclaw/my_secrets.json`** — открытый файл с секретами в обход Ключника (права 600,
+никем не читается). Разобран по отпечаткам, значения не печатались:
+- уже были в Ключнике: ключ proxy6 (`PROXY6_API_KEY`), ключ OpenAI (`OPENAI_API_KEY`
+  ссылается на `~/.openclaw/credentials/openai-api-key`), SMTP-хост (`UPS_SMTP_HOST`);
+- мёртвые, не переносились: ключ Google `****M1Tg` (Google: API key not valid),
+  ключ OpenRouter (401);
+- перенесены в Ключник 12 записей: `EMAIL_ADMIN_{ADDRESS,SMTP_HOST,SMTP_USER,SMTP_PASSWORD}`,
+  `EMAIL_BILLING_{ADDRESS,IMAP_HOST,IMAP_USER,IMAP_PASSWORD}`, `ADMIN_EMAIL_RECIPIENT`,
+  `SHEVBO_CLOUD_SSH_ALIAS`, `VPS_USER`, `VPS_DOMAIN`. Сверены по отпечаткам 12 из 12.
+  Живость почтовых паролей не проверялась (для этого пришлось бы логиниться).
+- Файл удалён. Боре ушло одно итоговое уведомление вместо 12 (`_notify_boris` на время
+  пачки подменялся заглушкой).
+
+**Мёртвый ключ Google `****M1Tg`** лежал в 71 файле:
+- 17 бэкапов `openclaw.json` (`.clobbered.*`, `.bak-*`, `bak2`, `bak3`) удалены. Попутно
+  ушли лишние копии живых секретов: 11 токенов ботов и живой ключ OpenAI;
+- в 53 файлах ключ заменён на `via-lineman`: три `models.json` (guilya, titan,
+  virtual-boris — ходят в Google через Lineman, он клиентский ключ срезает),
+  `auth-profiles` агента `main`, `openclaw.json.pre-lineman`, журнал крона, бэкап сессии
+  guilya, `credentials/gemini-api-key.bak-aiza` и 45 бэкапов сессий `main`;
+- в сессиях `main` дополнительно убраны токены ботов (в 5 файлах).
+
+**Сессии `main` НЕ удалены, хотя согласие было.** Выяснилось, что это не бэкапы, а
+**единственные копии** трёх сессий (оригиналов нет, 45 файлов, 19.5 МБ). Секреты из них
+вычищены, удаление переспрошено у Бориса.
+
+**Осталось расползание живого ключа OpenAI:** `~/.openclaw/agents/main/agent/plugins/openai/catalog.json`
+(помимо штатного места, на которое ссылается Ключник).
+
+`config validate` чист, шлюз openclaw перезапущен без ошибок.
+
 ## 2026-09-14 — «Klod-Access лежит целиком» (omniroute): три настоящих дефекта за ложной тревогой
 
 **Симптом.** Агент `omniroute@vs-code-local` (Windows, без WireGuard) сообщил, что
