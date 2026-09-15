@@ -544,16 +544,29 @@ async def main_entry(config: dict[str, Any]) -> None:
         logger.info("lineman_shutdown_complete")
 
 
-def main() -> None:
-    """CLI entry point."""
-    # DEBUG + asyncio debug в проде давали 3MB/сутки шума в stderr (каждый
-    # connect/EOF транспорта) и замедляли event loop. Для отладки: LINEMAN_DEBUG=1.
-    debug_mode = os.environ.get("LINEMAN_DEBUG") == "1"
+# Библиотеки, которые пишут в лог полный URL запроса. httpx на INFO печатает
+# `HTTP Request: GET https://api.telegram.org/bot<TOKEN>/getMe` — токен бота уходил
+# в ~/.pm2/logs/lineman-gateway-error.log при каждом старте (аудит 2026-09-15).
+_URL_LOGGING_LIBS = ("httpx", "httpcore")
+
+
+def configure_logging(debug_mode: bool) -> None:
+    """stdlib-логирование Lineman: уровень процесса и тишина библиотек с URL в логах."""
     logging.basicConfig(
         stream=sys.stderr,
         level=logging.DEBUG if debug_mode else logging.INFO,
         format="%(message)s",
     )
+    for name in _URL_LOGGING_LIBS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+def main() -> None:
+    """CLI entry point."""
+    # DEBUG + asyncio debug в проде давали 3MB/сутки шума в stderr (каждый
+    # connect/EOF транспорта) и замедляли event loop. Для отладки: LINEMAN_DEBUG=1.
+    debug_mode = os.environ.get("LINEMAN_DEBUG") == "1"
+    configure_logging(debug_mode)
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,

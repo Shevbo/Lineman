@@ -14,6 +14,7 @@ import ipaddress
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -131,6 +132,7 @@ REMOTE_SSH_CONFIG = {
         "key_path": "~/.ssh/id_ed25519", # Assumes this key is authorized on vibe
         # Windows: prevent Node.js from routing localhost requests through iProyal system proxy
         "cmd_prefix": 'set "NO_PROXY=localhost,127.0.0.1,::1" && ',
+        "shell": "cmd",                     # экранирование аргументов под cmd.exe, не sh
         "agent_map": {
             "virtual-boris-vibe": "vboris2", # VBoris2 on vibe is agent 'vboris2'
         },
@@ -179,6 +181,30 @@ def _expand_env(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_expand_env(i) for i in obj]
     return obj
+
+
+def build_remote_agent_command(cmd_prefix: str, remote_agent_id: str, message: str,
+                               shell: str = "sh") -> str:
+    """Строка для удалённой оболочки: `openclaw agent --agent <id> --message <текст> --json`.
+
+    Текст и id агента приходят из HTTP-запроса и экранируются целиком. Раньше
+    экранировались только кавычки, и `$(...)`, обратные кавычки, `\\"` исполнялись
+    на узле от имени ssh-пользователя (аудит 2026-09-15). cmd_prefix — доверенное
+    значение из REMOTE_SSH_CONFIG, остаётся сырым.
+
+    shell="cmd" (vibe, Windows): внутри "..." символы &|<>^ буквальны; вырваться
+    можно кавычкой (обратный слэш её не экранирует) и %VAR%. Кавычки заменяем на
+    апострофы, проценты удваиваем, переводы строк убираем.
+    """
+    if shell == "cmd":
+        def q(s: str) -> str:
+            s = (s.replace('"', "'").replace("%", "%%")
+                 .replace("\r", " ").replace("\n", " "))
+            return f'"{s}"'
+    else:
+        q = shlex.quote
+    return (f"{cmd_prefix}openclaw agent --agent {q(remote_agent_id)} "
+            f"--message {q(message)} --json")
 
 
 def _load_config() -> dict[str, Any]:
@@ -264,8 +290,14 @@ class ProxyServer:
             return False
         if not host:
             return False
-        if host in ("localhost",) or host.endswith(".local") or "." not in host:
-            return True  # loopback или короткое WG-имя узла (smain/hoster/sdev)
+        if host in ("localhost",) or host.endswith(".local"):
+            return True
+        if "." not in host:
+            # Короткое WG-имя узла (smain/hoster/sdev). Число без точек — не имя:
+            # резолвер принимает десятичный и шестнадцатеричный IP как хост
+            # (3232235777 → 192.168.1.1), и так проверка сетей обходилась
+            # (аудит 2026-09-15).
+            return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9-]*", host))
         try:
             return self._is_admin_allowed(host)  # 10.66/127/TS/docker сети
         except ValueError:
@@ -308,6 +340,21 @@ class ProxyServer:
         if method == "CONNECT":
             return True
         return request_path.startswith("http://") or request_path.startswith("https://")
+
+    def _reverse_proxy_blocked(self, request_path_only: str, source_ip: str) -> bool:
+        """True если запрос на /proxy/{provider}/* пришёл не из доверенной сети.
+
+        Аудит 2026-09-15: :9090 слушает 0.0.0.0, а реверс-прокси не был за
+        IP-барьером. Lineman сам подставляет ключи провайдеров (deepseek, google,
+        kimi, openrouter) и OAuth Клода (anthropic по заявленному X-Agent-Name),
+        поэтому любой адрес в интернете получал LLM за счёт федерации:
+        GET http://83.69.248.77:9090/proxy/deepseek/v1/models → 200 со списком.
+        Потребители /proxy/* — только агенты федерации (loopback/WG/TS/docker);
+        за месяц в request_log одни smain и hoster.
+        """
+        if not request_path_only.startswith("/proxy/"):
+            return False
+        return not self._is_admin_allowed(source_ip)
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self._config = config or _load_config()
@@ -383,7 +430,8 @@ class ProxyServer:
         # bridge: POST $SHECTORY_PORTAL_URL/api/internal/verify-portal-credentials
         # Bearer $SHECTORY_AUTH_BRIDGE_SECRET, body {email, password}.
         # Кэш положительных проверок: sha256(email:password) → expires_at.
-        self._portal_auth_cache: dict[str, float] = {}
+        # ключ (почта+пароль) -> (срок годности, роль портала)
+        self._portal_auth_cache: dict[str, tuple[float, str]] = {}
         self._portal_auth_ttl: float = 300.0
 
         # Klod-Access LLM Gateway (политика Бори 2026-06-18: «доступ к LLM строго
@@ -505,6 +553,24 @@ class ProxyServer:
                 except (asyncio.TimeoutError, Exception):
                     pass
                 self._send_simple_and_close(wr, 403, {"error": "forward proxy not reachable from this network"})
+                return
+
+            # ИБ-сторож реверс-прокси: /proxy/{provider}/* — только из доверенных сетей.
+            # Lineman подставляет сюда свои ключи провайдеров, снаружи ходить некому
+            # (аудит 2026-09-15: интернет получал deepseek/google за счёт федерации).
+            if self._reverse_proxy_blocked(request_path_only, source_ip):
+                logger.warning(
+                    "reverse_proxy_blocked",
+                    path=request_path_only, method=method, source_ip=source_ip,
+                )
+                try:
+                    while True:
+                        hdr = await asyncio.wait_for(rd.readline(), timeout=2)
+                        if hdr in (b"\r\n", b"\n", b""):
+                            break
+                except (asyncio.TimeoutError, Exception):
+                    pass
+                self._send_simple_and_close(wr, 403, {"error": "reverse proxy not reachable from this network"})
                 return
 
             # Management API paths — handle locally
@@ -652,7 +718,7 @@ class ProxyServer:
             elif request_path_only == "/api/portal-auth-check":
                 headers = await self._read_headers(rd)
                 creds = self._parse_basic_auth(headers)
-                if creds and await self._verify_portal_credentials(*creds):
+                if creds and await self._portal_admin_ok(*creds):
                     body = b'{"ok":true}'
                     wr.write(
                         f"HTTP/1.1 200 OK\r\n"
@@ -685,10 +751,13 @@ class ProxyServer:
             elif request_path_only == "/api/tg/miniapp-auth" and method == "POST":
                 await self._raw_api_miniapp_auth(rd, wr)
                 return
-            # nginx auth_request: 200 если валидна cookie-сессия, 401 иначе (без popup).
+            # nginx auth_request: 200 если сессия валидна И роль админская, 401 иначе.
+            # Это единственная дверь dashboard.shectory.ru: за ней и страницы, и весь
+            # /api/, куда Lineman пускает по IP (nginx ходит с 127.0.0.1). Проверка
+            # роли именно здесь, потому что второй двери нет.
             elif request_path_only == "/api/session-check":
                 headers = await self._read_headers(rd)
-                email = self._session_email_from_cookie(headers)
+                email = self._session_admin_email(headers)
                 if email:
                     body = b'{"ok":true}'
                     wr.write(
@@ -748,9 +817,9 @@ class ProxyServer:
                 # Единая учётка Shectory Portal. Основной путь — cookie-сессия (через
                 # nginx /login); Basic оставлен как fallback для прямого доступа к :9090.
                 headers = await self._read_headers(rd)
-                if not self._session_email_from_cookie(headers):
+                if not self._session_admin_email(headers):
                     creds = self._parse_basic_auth(headers)
-                    if not creds or not await self._verify_portal_credentials(*creds):
+                    if not creds or not await self._portal_admin_ok(*creds):
                         await self._send_401_basic(wr)
                         return
                 await self._raw_dashboard(
@@ -759,9 +828,9 @@ class ProxyServer:
             # Та же миниаппа (чаты+тикеты+бэклог) через дашборд по cookie-сессии (вне Telegram).
             elif request_path_only in ("/klod", "/klod/"):
                 headers = await self._read_headers(rd)
-                if not self._session_email_from_cookie(headers):
+                if not self._session_admin_email(headers):
                     creds = self._parse_basic_auth(headers)
-                    if not creds or not await self._verify_portal_credentials(*creds):
+                    if not creds or not await self._portal_admin_ok(*creds):
                         await self._send_401_basic(wr)
                         return
                 await self._raw_dashboard(rd, wr, "miniapp.html", drain_headers=False)
@@ -772,9 +841,9 @@ class ProxyServer:
             elif request_path_only in ("/builder", "/builder/",
                                        "/api/builder", "/api/builder/"):
                 headers = await self._read_headers(rd)
-                if not self._session_email_from_cookie(headers):
+                if not self._session_admin_email(headers):
                     creds = self._parse_basic_auth(headers)
-                    if not creds or not await self._verify_portal_credentials(*creds):
+                    if not creds or not await self._portal_admin_ok(*creds):
                         await self._send_401_basic(wr)
                         return
                 await self._raw_dashboard(
@@ -1223,7 +1292,6 @@ class ProxyServer:
                 return
             
             try:
-                escaped_msg = message_text.replace('"', '\\"')
                 cmd_prefix = ssh_cfg.get("cmd_prefix", "")
                 ssh_cmd = ["ssh", "-o", "ConnectTimeout=15"]
                 if ssh_cfg.get("proxy_jump"):
@@ -1231,7 +1299,10 @@ class ProxyServer:
                 ssh_cmd += [
                     "-i", os.path.expanduser(ssh_cfg["key_path"]),
                     f"{ssh_cfg['user']}@{ssh_cfg['host_ip']}",
-                    f'{cmd_prefix}openclaw agent --agent {remote_agent_id} --message "{escaped_msg}" --json'
+                    build_remote_agent_command(
+                        cmd_prefix, remote_agent_id, message_text,
+                        shell=ssh_cfg.get("shell", "sh"),
+                    ),
                 ]
                 logger.debug("remote_agent_call", cmd=" ".join(ssh_cmd))
                 
@@ -3536,29 +3607,66 @@ class ProxyServer:
         return email.strip(), password
 
     # --- Сессия по cookie (брендированный логин Shectory вместо Basic popup) ---
-    # Токен подписывается тем же SHECTORY_AUTH_BRIDGE_SECRET (стандарт федерации):
-    # формат email:expires:HMAC_SHA256("email:expires", secret). HttpOnly cookie.
+    # Токен подписывается тем же SHECTORY_AUTH_BRIDGE_SECRET (стандарт федерации),
+    # HttpOnly cookie. Формат v2: "v2:<роль>:<email>:<expires>:<HMAC>".
+    #
+    # Роль лежит ВНУТРИ подписи не для красоты: nginx dashboard.shectory.ru пускает на
+    # весь /api/ по одному auth_request на /api/session-check, а дальше Lineman видит
+    # клиента как 127.0.0.1 и считает его доверенным по IP-allowlist'у. Пока роль в
+    # сессии не хранилась, любой пользователь портала (в базе есть роли user и trader)
+    # получал полный админ-API федерации: /api/tg/send, письма агентам, статистика пула.
+    # Найдено аудитом 2026-09-16.
+    #
+    # Старый формат "email:expires:HMAC" роли не несёт, поэтому доверия админа ему нет:
+    # такие cookie отвергаются и владелец логинится заново. Это разовое неудобство
+    # против тихой эскалации прав.
+
+    _ADMIN_ROLES = frozenset({"admin", "superadmin"})
+    # Роль сессии Telegram-миниаппы. Вход туда уже ограничен allowlist'ом user.id в
+    # KLOD_MINIAPP_ALLOW, то есть пускает только Борю, и подделать initData без токена
+    # бота нельзя. Роль здесь — просто явное имя того доступа, что и так был выдан.
+    _MINIAPP_ROLE = "admin"
 
     def _session_secret(self) -> str:
         return (os.environ.get("SHECTORY_AUTH_BRIDGE_SECRET") or "").strip()
 
     def _make_session_token(self, email: str, ttl: int = 7 * 86400,
-                            now: float | None = None) -> str:
+                            now: float | None = None, role: str = "user") -> str:
         secret = self._session_secret()
         exp = int((now if now is not None else time.time()) + ttl)
-        msg = f"{email.strip().lower()}:{exp}"
+        # Роль чистим от разделителя: иначе "ad:min" сдвинул бы разбор токена.
+        role_s = (role or "user").strip().lower().replace(":", "") or "user"
+        msg = f"v2:{role_s}:{email.strip().lower()}:{exp}"
         sig = hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
         return f"{msg}:{sig}"
 
-    def _verify_session_token(self, token: str, now: float | None = None) -> str | None:
+    def _verify_session_token(
+        self, token: str, now: float | None = None,
+    ) -> tuple[str, str] | None:
+        """Вернуть (email, роль) или None.
+
+        У токена старого формата роли нет, и выдумывать её нельзя: возвращаем "legacy",
+        чтобы вызывающий сам решил. Для страниц этого хватает, для админ-API — нет.
+        """
         secret = self._session_secret()
         if not secret or not token:
             return None
+        role = "legacy"
+        body = token
+        if token.startswith("v2:"):
+            try:
+                _, role, body = token.split(":", 2)
+            except ValueError:
+                return None
+            if not role:
+                return None
         try:
-            email, exp_s, sig = token.rsplit(":", 2)
+            email, exp_s, sig = body.rsplit(":", 2)
         except ValueError:
             return None
-        expected = hmac.new(secret.encode(), f"{email}:{exp_s}".encode(),
+        signed = f"v2:{role}:{email}:{exp_s}" if token.startswith("v2:") \
+            else f"{email}:{exp_s}"
+        expected = hmac.new(secret.encode(), signed.encode(),
                             hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, expected):
             return None
@@ -3568,28 +3676,61 @@ class ProxyServer:
             return None
         if exp < (now if now is not None else time.time()):
             return None
-        return email
+        return email, role
 
-    def _session_email_from_cookie(self, headers: dict[str, str],
-                                   now: float | None = None) -> str | None:
+    def _session_identity(self, headers: dict[str, str],
+                          now: float | None = None) -> tuple[str, str] | None:
+        """(email, роль) из cookie сессии."""
         for part in headers.get("cookie", "").split(";"):
             k, _, v = part.strip().partition("=")
             if k == "shectory_session" and v:
                 return self._verify_session_token(v, now=now)
         return None
 
+    def _session_email_from_cookie(self, headers: dict[str, str],
+                                   now: float | None = None) -> str | None:
+        ident = self._session_identity(headers, now=now)
+        return ident[0] if ident else None
+
+    def _session_admin_email(self, headers: dict[str, str],
+                             now: float | None = None) -> str | None:
+        """Почта владельца сессии, если у него есть права админа. Иначе None."""
+        ident = self._session_identity(headers, now=now)
+        if not ident:
+            return None
+        email, role = ident
+        return email if role in self._ADMIN_ROLES else None
+
     async def _verify_portal_credentials(self, email: str, password: str) -> bool:
-        """Verify credentials against Shectory Portal bridge with positive-cache TTL."""
+        """True если пара почта/пароль валидна. Роль не проверяется — см. _portal_role."""
+        return (await self._portal_role(email, password)) is not None
+
+    async def _portal_admin_ok(self, email: str, password: str) -> bool:
+        """True только для учётки с ролью админа: вход в панель федерации."""
+        role = await self._portal_role(email, password)
+        return role is not None and role in self._ADMIN_ROLES
+
+    async def _portal_role(self, email: str, password: str) -> str | None:
+        """Роль пользователя портала или None, если пара почта/пароль неверна.
+
+        Мост портала роль возвращал всегда, но Lineman её выбрасывал — из-за этого
+        не-админы получали доступ к панели. Теперь роль доезжает до вызывающего и
+        кладётся в кэш вместе со сроком годности.
+        """
         key = hashlib.sha256(f"{email.lower()}:{password}".encode("utf-8")).hexdigest()
         now = time.time()
-        exp = self._portal_auth_cache.get(key)
-        if exp and exp > now:
-            return True
+        hit = self._portal_auth_cache.get(key)
+        if hit:
+            # Кэш теперь держит (срок, роль). Записи старого формата (только срок)
+            # могли остаться от процесса до рестарта — они роль не знают, и доверять
+            # им как админским нельзя: перепроверяем у портала.
+            if isinstance(hit, tuple) and hit[0] > now:
+                return hit[1]
 
         secret = (os.environ.get("SHECTORY_AUTH_BRIDGE_SECRET") or "").strip()
         if not secret:
             logger.warning("portal_auth_no_secret")
-            return False
+            return None
         base = (os.environ.get("SHECTORY_PORTAL_URL")
                 or "http://127.0.0.1:3000").rstrip("/")
         url = f"{base}/api/internal/verify-portal-credentials"
@@ -3605,20 +3746,24 @@ class ProxyServer:
                     json={"email": email, "password": password},
                 ) as r:
                     if r.status != 200:
-                        return False
+                        return None
                     data = await r.json(content_type=None)
                     if not data or not data.get("ok"):
-                        return False
+                        return None
+                    # Портал роль присылает всегда; отсутствие поля трактуем как
+                    # минимальные права, а не как админа.
+                    role = str(data.get("role") or "user").strip().lower()
         except Exception as e:
             logger.warning("portal_auth_check_failed", error=str(e)[:160])
-            return False
+            return None
 
-        self._portal_auth_cache[key] = now + self._portal_auth_ttl
+        self._portal_auth_cache[key] = (now + self._portal_auth_ttl, role)
         if len(self._portal_auth_cache) > 256:
             self._portal_auth_cache = {
-                k: v for k, v in self._portal_auth_cache.items() if v > now
+                k: v for k, v in self._portal_auth_cache.items()
+                if isinstance(v, tuple) and v[0] > now
             }
-        return True
+        return role
 
     async def _send_401_basic(
         self,
@@ -3661,12 +3806,20 @@ class ProxyServer:
             self._send_simple_and_close(wr, 503, {"error": "Сервис авторизации не настроен"})
             await wr.drain(); wr.close(); return
 
-        ok = await self._verify_portal_credentials(email, password)
-        if not ok:
+        role = await self._portal_role(email, password)
+        if role is None:
             self._send_simple_and_close(wr, 401, {"error": "Неверный e-mail или пароль"})
             await wr.drain(); wr.close(); return
+        if role not in self._ADMIN_ROLES:
+            # Пароль верный, но панель федерации не для этой роли. Отдаём 403 без
+            # cookie: иначе человек попал бы в петлю «логин — редирект на логин».
+            logger.warning("portal_login_denied_role", role=role)
+            self._send_simple_and_close(wr, 403, {
+                "error": "Учётной записи не открыт доступ к панели федерации",
+            })
+            await wr.drain(); wr.close(); return
 
-        token = self._make_session_token(email)
+        token = self._make_session_token(email, role=role)
         body = b'{"ok":true}'
         wr.write(
             f"HTTP/1.1 200 OK\r\n"
@@ -3709,7 +3862,7 @@ class ProxyServer:
             await wr.drain(); wr.close(); return
 
         uid = str(parsed["user"]["id"])
-        token = self._make_session_token(f"telegram:{uid}")
+        token = self._make_session_token(f"telegram:{uid}", role=self._MINIAPP_ROLE)
         body = b'{"ok":true}'
         wr.write(
             f"HTTP/1.1 200 OK\r\n"

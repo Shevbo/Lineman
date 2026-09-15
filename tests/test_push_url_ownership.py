@@ -33,3 +33,14 @@ def test_push_url_agent_must_be_in_registry(srv):
     assert klod_ask.is_agent_allowed("nurse", srv._klod_ask_allowed)
     assert klod_ask.is_agent_allowed("career-bot", srv._klod_ask_allowed)
     assert not klod_ask.is_agent_allowed("evil", srv._klod_ask_allowed)
+
+
+def test_push_url_internal_rejects_numeric_hosts(srv):
+    """Аудит 2026-09-15: хост без точки считался коротким WG-именем, но glibc
+    принимает десятичный/шестнадцатеричный IP как хост: 3232235777 → 192.168.1.1.
+    Так outbox уводился на внешний адрес мимо проверки сетей."""
+    assert not srv._push_url_internal("http://3232235777/steal")
+    assert not srv._push_url_internal("http://0xC0A80101/steal")
+    assert not srv._push_url_internal("http://167772161:8080/x")
+    assert not srv._push_url_internal("http://0300.0250.01.01/x")
+    assert not srv._push_url_internal("http://0x7f.1/x")

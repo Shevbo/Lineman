@@ -62,15 +62,18 @@ def test_session_no_secret_fail_closed(srv, monkeypatch):
 async def test_verify_portal_credentials_cache_hit(srv):
     import hashlib
     key = hashlib.sha256(b"a@b.c:pw").hexdigest()
-    srv._portal_auth_cache[key] = time.time() + 60
+    # Кэш держит (срок, роль) с фикса эскалации 2026-09-16: по одному сроку
+    # нельзя понять, админ это или трейдер.
+    srv._portal_auth_cache[key] = (time.time() + 60, "superadmin")
     assert await srv._verify_portal_credentials("a@b.c", "pw") is True
+    assert await srv._portal_role("a@b.c", "pw") == "superadmin"
 
 
 @pytest.mark.asyncio
 async def test_verify_portal_credentials_cache_expired(srv, monkeypatch):
     import hashlib
     key = hashlib.sha256(b"a@b.c:pw").hexdigest()
-    srv._portal_auth_cache[key] = time.time() - 1
+    srv._portal_auth_cache[key] = (time.time() - 1, "superadmin")
     monkeypatch.delenv("SHECTORY_AUTH_BRIDGE_SECRET", raising=False)
     assert await srv._verify_portal_credentials("a@b.c", "pw") is False
 
@@ -139,8 +142,11 @@ async def test_verify_portal_credentials_bridge_network_error(srv, monkeypatch):
 
 def test_session_token_roundtrip(srv, monkeypatch):
     monkeypatch.setenv("SHECTORY_AUTH_BRIDGE_SECRET", "s3cret")
-    tok = srv._make_session_token("Bshevelev@Mail.ru")
-    assert srv._verify_session_token(tok) == "bshevelev@mail.ru"  # email нормализован
+    tok = srv._make_session_token("Bshevelev@Mail.ru", role="superadmin")
+    # Проверка возвращает пару (почта, роль): роль едет внутри подписи.
+    assert srv._verify_session_token(tok) == ("bshevelev@mail.ru", "superadmin")
+    assert srv._session_email_from_cookie(
+        {"cookie": f"shectory_session={tok}"}) == "bshevelev@mail.ru"
 
 
 def test_session_token_expired(srv, monkeypatch):
