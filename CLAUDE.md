@@ -227,8 +227,8 @@ pre_approved в manifest). Так с cutover 2026-08-11 после утечки 
 
 **Не источники Lineman** (исправлено 2026-09-14, раньше здесь было написано обратное):
 `~/.openclaw/openclaw.json` и `~/.openclaw/agents/main/agent/auth-profiles.json`.
-В последнем лежит сырой ключ DeepSeek ликвидированного агента `main` — Lineman его не
-использует (сверено: не совпадает с ключом Lineman); удалять только с согласия Бориса.
+В последнем лежал сырой ключ DeepSeek ликвидированного агента `main`; Lineman его не
+использовал. 2026-09-15 с согласия Бориса заменён заглушкой `via-lineman`.
 Исключение одно: токены ботов для `/api/tg/send` Lineman читает из `openclaw.json`
 (`channels.telegram.accounts`), кроме `klod` — его токен приходит из Ключника.
 
