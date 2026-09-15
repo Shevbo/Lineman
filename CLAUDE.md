@@ -79,6 +79,7 @@
 | `scripts/klod_rollcall.py` | Перекличка (cron 08:30): ядро+PM2+systemd+отвеченность inbox+агенты 24ч+hoster; чинит замерших, TG-сводка Боре | нет |
 | `scripts/lazy_worker.py` + `lazy_queue.py` | Lazy Queue: локальные LLM-задачи (PM2 lazy-worker) | нет |
 | `scripts/federation_sweep.py` | cron: фоновые sweep-задачи; шлёт ТОЛЬКО если lm-studio жив | нет |
+| `scripts/dns_watch.py` + `dns_watch.json` | cron 11,41 * * * * под flock+timeout: сторож DNS-записей зоны shectory.ru (DNS у hoster.ru) — делегирование unisenderlinks на NS Unisender, A, MX, SPF, DKIM, DMARC. Спрашивает авторитетные серверы напрямую, разбирает и ANSWER, и AUTHORITY (referral). Алерт Боре через /api/tg/send при пропаже и восстановлении, напоминание раз в сутки. Логи `~/logs/klod/dns_watch.jsonl`. Появился 2026-09-15. | нет |
 | `scripts/subscription_watcher.py` | cron 0 6 UTC (09:00 MSK): следит за proxy6/iproyal/deepseek/claude-plus/gemini-plus. Manual expiry в Ключнике: `<SERVICE>_NEXT_RENEWAL=YYYY-MM-DD`. Логи `~/logs/klod/subscriptions.jsonl`. Порог 14 дней. | нет |
 | `scripts/klod_support_watchdog.py` | cron */5 под flock+timeout: 3 валидации (V1 selfping диспетчера, V2 aging OPS-тикетов от агентов, V3 heartbeat systemd+pm2). Логи `~/logs/klod/support_watchdog.jsonl`. | нет |
 | `gemini_pro.py` | pro-гейт для google: агент без гранта → база (3.5-flash) | нет |

@@ -1,0 +1,63 @@
+{
+  "_comment": "Ожидаемые DNS-записи зоны shectory.ru (DNS у hoster.ru). Проверяются на авторитетных серверах напрямую. contains — фрагменты, которые обязаны быть в значениях записи (без учёта регистра). Сторож: scripts/dns_watch.py.",
+  "servers": ["ns10.hoster.ru", "ns11.hoster.ru"],
+  "checks": [
+    {
+      "id": "unisender-links-ns",
+      "title": "Делегирование unisenderlinks.shectory.ru на NS Unisender",
+      "name": "unisenderlinks.shectory.ru",
+      "type": "NS",
+      "contains": ["uns1.unisender.com", "uns2.unisender.com", "uns3.unisender.com"],
+      "hint": "в панели DNS hoster.ru для зоны shectory.ru добавить 3 записи NS unisenderlinks -> uns1/uns2/uns3.unisender.com. (TTL 3600). Без них Unisender удаляет домен ссылок."
+    },
+    {
+      "id": "root-a",
+      "title": "A-запись shectory.ru",
+      "name": "shectory.ru",
+      "type": "A",
+      "contains": ["83.69.248.77"]
+    },
+    {
+      "id": "mail-a",
+      "title": "A-запись mail.shectory.ru (почтовый сервер)",
+      "name": "mail.shectory.ru",
+      "type": "A",
+      "contains": ["83.69.248.77"]
+    },
+    {
+      "id": "mx",
+      "title": "MX shectory.ru",
+      "name": "shectory.ru",
+      "type": "MX",
+      "contains": ["mail.shectory.ru"]
+    },
+    {
+      "id": "spf",
+      "title": "SPF shectory.ru с Unisender",
+      "name": "shectory.ru",
+      "type": "TXT",
+      "contains": ["v=spf1", "include:spf.unisender.ru"]
+    },
+    {
+      "id": "unisender-verify",
+      "title": "Подтверждение домена Unisender Go",
+      "name": "shectory.ru",
+      "type": "TXT",
+      "contains": ["unisender-go-validate-hash="]
+    },
+    {
+      "id": "dkim-unisender",
+      "title": "DKIM Unisender (us._domainkey)",
+      "name": "us._domainkey.shectory.ru",
+      "type": "TXT",
+      "contains": ["v=DKIM1"]
+    },
+    {
+      "id": "dmarc",
+      "title": "DMARC shectory.ru",
+      "name": "_dmarc.shectory.ru",
+      "type": "CNAME",
+      "contains": ["dmarc.unisender.ru"]
+    }
+  ]
+}
