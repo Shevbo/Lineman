@@ -530,7 +530,8 @@
       "portal",
       "promptmaster",
       "shectory-portal",
-      "smarthome"
+      "smarthome",
+      "klod-sentry"
     ],
     "gemini_full_access": [
       "ltx"

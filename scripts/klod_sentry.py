@@ -69,6 +69,47 @@ def check_dispatch() -> dict:
         return {"service": "klod-dispatch", "ok": False, "detail": f"no heartbeat: {e}"[:120]}
 
 
+def check_klod_answers() -> dict:
+    """Способен ли Клод НА САМОМ ДЕЛЕ ответить старшей моделью.
+
+    Зачем отдельная проба. Остальные проверки смотрят, что порт отвечает 200, а
+    `/health` зелен даже когда Клод не может ответить ни одному агенту: за ним стоит
+    чужой лимит, до которого health-ручка не достаёт. 2026-09-18 Клод полтора суток
+    отвечал федерации через слабые модели и фолбэки, а Дозор всё это время рапортовал
+    «всё в порядке» — потому что проверял живость сокета, а не способность работать.
+
+    Проба намеренно дешёвая: два слова в ответе, модель `normal`. Раз в 5 минут это
+    несопоставимо дешевле, чем сутки незамеченной деградации. `latency_ms` пишем в
+    журнал всегда: по нему видно, что ответы начали даваться через повторы, ещё до
+    того, как проба совсем покраснеет.
+    """
+    body = json.dumps({"agent": "klod-sentry", "prompt": "ответь одним словом: ок",
+                       "model_hint": "normal", "max_tokens": 16}).encode("utf-8")
+    req = urllib.request.Request(f"{LINEMAN}/api/klod/ask", data=body, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    t0 = time.monotonic()
+    try:
+        with _NOPROXY.open(req, timeout=120) as r:
+            data = json.loads(r.read() or b"{}")
+        ms = int((time.monotonic() - t0) * 1000)
+        text = (data.get("text") or data.get("answer") or "").strip()
+        return {"service": "klod-answers", "ok": bool(text),
+                "latency_ms": ms,
+                "detail": f"ответил за {ms} мс" if text else "пустой ответ"}
+    except urllib.error.HTTPError as e:
+        ms = int((time.monotonic() - t0) * 1000)
+        raw = e.read().decode("utf-8", "replace")[:160]
+        # 429 здесь — это исчерпанный лимит ПОСЛЕ повторов 2/4/8/16 внутри Lineman.
+        # Отличаем от поломки: чинить рестартом нечего, ждать бесполезно, но знать надо.
+        kind = "лимит" if e.code == 429 else f"http {e.code}"
+        return {"service": "klod-answers", "ok": False, "latency_ms": ms,
+                "detail": f"{kind}: {raw}"}
+    except Exception as e:
+        ms = int((time.monotonic() - t0) * 1000)
+        return {"service": "klod-answers", "ok": False, "latency_ms": ms,
+                "detail": str(e)[:120]}
+
+
 def _load_state() -> dict:
     try:
         return json.load(open(STATE_FILE))
@@ -133,6 +174,10 @@ def restart_dispatch(st: dict, now: int) -> str:
 def main() -> None:
     now = int(time.time())
     checks = [check_lineman(), check_keymaster(), check_dispatch()]
+    # Пробу «Клод реально отвечает» делаем, только когда шлюз жив: иначе она просто
+    # повторит уже известный отказ и зря прождёт свой таймаут.
+    if checks[0]["ok"]:
+        checks.append(check_klod_answers())
     st = _load_state()
     actions = []
 
