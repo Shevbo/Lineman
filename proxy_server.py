@@ -2968,6 +2968,16 @@ class ProxyServer:
                     "retry_after": int(cooldown),
                     "model": model_id,
                 })
+            if klod_ask.is_rate_limited(err):
+                # Повторы уже сделаны внутри _klod_ask_invoke и не помогли. Модель
+                # НЕ подменяем на слабую (решение Бориса 2026-09-18): честный отказ
+                # лучше тихо испорченного ответа.
+                return self._send_simple_and_close(wr, 429, {
+                    "error": klod_ask.rate_limit_message(model_id),
+                    "retry_after": 300,
+                    "model": model_id,
+                    "rate_limited": True,
+                })
             return self._send_simple_and_close(
                 wr, 502, {"error": f"llm call failed: {safe_err[:160]}"})
 
@@ -3005,14 +3015,48 @@ class ProxyServer:
         except Exception:
             return ""
 
+    # Отступы между повторами при 429, секунды (решение Бориса 2026-09-18).
+    #
+    # Лимит подписки плавающий: он срабатывает на всплеске и отпускает через секунды,
+    # а не выбран на сутки. Claude Code это переживает, потому что повторяет попытку;
+    # klod_ask сдавался с первого отказа — из-за этого Клод отвечал агентам хуже, чем
+    # мог, при живой квоте. Суммарное ожидание 30с укладывается в таймаут клиента.
+    _KLOD_ASK_RETRY_BACKOFF_S = (2, 4, 8, 16)
+
     async def _klod_ask_invoke(
         self, path: str, body: dict, headers: dict, provider: str,
     ) -> tuple[str, float]:
         """Сделать LLM-вызов через loopback на сам Lineman (/proxy/...).
 
+        При 429 повторяет с нарастающим отступом: лимит подписки отпускает быстро,
+        и одна лишняя попытка спасает ответ старшей моделью. Исчерпав попытки,
+        поднимает RuntimeError с пометкой rate_limited — вызывающий по ней отличает
+        «занято, попробуй позже» от настоящей поломки.
+
         Возвращает (text, elapsed_ms). Использует self._upstream_session, чтобы
         не плодить новые TCP-сессии. Логика разбора — в klod_ask.extract_text.
         provider передаётся явно из _raw_api_klod_ask, где он уже известен."""
+        attempts = len(self._KLOD_ASK_RETRY_BACKOFF_S) + 1
+        for attempt in range(attempts):
+            try:
+                return await self._klod_ask_invoke_once(path, body, headers, provider)
+            except RuntimeError as exc:
+                if not klod_ask.is_rate_limited(str(exc)):
+                    raise
+                if attempt >= attempts - 1:
+                    logger.warning("klod_ask_rate_limited_giving_up",
+                                   attempts=attempts, path=path)
+                    raise RuntimeError("rate_limited: %s" % exc) from exc
+                pause = self._KLOD_ASK_RETRY_BACKOFF_S[attempt]
+                logger.info("klod_ask_rate_limited_retry",
+                            attempt=attempt + 1, pause_s=pause, path=path)
+                await asyncio.sleep(pause)
+        raise RuntimeError("rate_limited: попытки исчерпаны")  # недостижимо
+
+    async def _klod_ask_invoke_once(
+        self, path: str, body: dict, headers: dict, provider: str,
+    ) -> tuple[str, float]:
+        """Одна попытка вызова. Повторами заведует _klod_ask_invoke."""
         if self._upstream_session is None:
             raise RuntimeError("upstream session not initialized")
         url = f"http://127.0.0.1:9090{path}"
