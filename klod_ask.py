@@ -70,6 +70,25 @@ TTS_PRESETS: dict[str, tuple[str, str]] = {
 
 VALID_PROVIDERS = {"anthropic", "google", "deepseek", "lm-studio"}
 
+# Обязательная «визитка» для OAuth-токена подписки (инцидент 2026-09-18).
+#
+# Lineman ходит в Anthropic OAuth-токеном из ~/.claude/.credentials.json — тем же,
+# которым живёт Claude Code. Такой токен обслуживает ТОЛЬКО запросы, которые выглядят
+# как Claude Code: первым блоком system обязана идти эта строка. Запрос без неё
+# отклоняется, но не с внятным «не тот клиент», а под видом лимита:
+# `rate_limit_error` с пустым message "Error" и БЕЗ единого заголовка
+# anthropic-ratelimit-* и без retry-after. Отличать подделку от настоящего лимита
+# нужно именно по отсутствию этих заголовков.
+#
+# Цена ошибки: sonnet и opus отвечали 429 на каждый запрос, Клод полутора суток
+# сидел на haiku и фолбэках и был глупее любого агента федерации, а по логам это
+# выглядело как исчерпанная подписка. Проверено: тот же sonnet и тот же opus с этой
+# строкой отвечают 200 немедленно.
+ANTHROPIC_OAUTH_SYSTEM: tuple[dict[str, str], ...] = (
+    {"type": "text",
+     "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+)
+
 # 2026-07-23 Боря: «gemini сейчас берём под проект LTX (генерация картинок).
 # Доступ к старшим моделям и image-генерации — только LTX. Остальные — flash-lite.»
 # Полный доступ к любой google-модели имеют агенты из GEMINI_FULL_ACCESS (config-override
@@ -236,6 +255,7 @@ def build_request_payload(provider: str, model_id: str, prompt: str,
         body = {
             "model": model_id,
             "max_tokens": max_tokens,
+            "system": list(ANTHROPIC_OAUTH_SYSTEM),
             "messages": [{"role": "user", "content": prompt}],
         }
         headers = {
