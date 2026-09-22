@@ -34,6 +34,7 @@ from _http_raw import handle_tunnel, handle_http
 from reverse_proxy import handle_reverse_proxy
 from circuit_breaker import CircuitBreaker
 import klod_ask
+import portal_cards
 from dedup_cache import DedupCache
 from fedrag_proxy import FedRagProxy
 from tg_miniapp import validate_init_data, user_id_allowed
@@ -253,6 +254,7 @@ class ProxyServer:
         "/api/tg/send": "POST",
         "/api/sms/message": "POST",
         "/api/fedrag/stats": "GET",
+        "/api/portal/agents": "GET",
         "/api/keymaster/leak_alert": "POST",
         "/api/login": "POST",
         "/api/tg/miniapp-auth": "POST",
@@ -673,6 +675,49 @@ class ProxyServer:
             # Индекс федерации: агент спрашивает канон вместо чтения его целиком
             elif request_path_only == "/api/fedrag/search":
                 await self._raw_api_fedrag_search(rd, wr, method)
+                return
+            # Карточки агентов: их спрашивает онбординг (check_portal_card.sh).
+            # Пока ручек не было, скрипт всегда сваливался в запасной путь и слал
+            # Клоду «portal-card-missing» — в трекере от этого накопились четыре
+            # задачи, старейшая с 29 июня.
+            elif request_path_only == "/api/portal/agents" and method == "GET":
+                await self._drain_headers(rd)
+                self._send_simple_and_close(
+                    wr, 200, {"agents": portal_cards.list_cards()})
+                await wr.drain()
+                wr.close()
+                return
+            elif request_path_only.startswith("/api/portal/agents/") and method == "GET":
+                await self._drain_headers(rd)
+                who = request_path_only[len("/api/portal/agents/"):]
+                card = portal_cards.get_card(who)
+                if card:
+                    self._send_simple_and_close(wr, 200, card)
+                else:
+                    self._send_simple_and_close(
+                        wr, 404, {"error": "карточки нет", "agent_id": who})
+                await wr.drain()
+                wr.close()
+                return
+            elif request_path_only == "/api/portal/agents" and method == "POST":
+                headers = await self._read_headers(rd)
+                clen = int(headers.get("content-length", "0") or "0")
+                raw = await asyncio.wait_for(
+                    rd.read(min(clen, 16384)), timeout=10) if clen > 0 else b""
+                try:
+                    payload = json.loads(raw or b"{}")
+                except Exception:
+                    self._send_simple_and_close(wr, 400, {"error": "тело не JSON"})
+                    await wr.drain(); wr.close(); return
+                if not isinstance(payload, dict):
+                    self._send_simple_and_close(wr, 400, {"error": "ожидался объект"})
+                    await wr.drain(); wr.close(); return
+                code, body = portal_cards.upsert_card(payload)
+                logger.info("portal_card_upsert",
+                            agent=str(payload.get("agent_id"))[:40], status=code)
+                self._send_simple_and_close(wr, code, body)
+                await wr.drain()
+                wr.close()
                 return
             elif request_path_only == "/api/fedrag/stats" and method == "GET":
                 await self._drain_headers(rd)
