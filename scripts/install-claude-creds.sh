@@ -46,7 +46,11 @@ import json, sys, datetime, os
 new_p, dest_p, force = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 
 def oauth(p):
-    d = json.load(open(p, encoding="utf-8"))
+    # BOM снимаем явно: Windows отдаёт файл с ним и через `type`, и через
+    # PowerShell, а json.load на нём падает невнятным «Expecting value: line 1
+    # column 1». Для человека у ярлыка это выглядит как «скрипт сломался».
+    with open(p, encoding="utf-8-sig") as fh:
+        d = json.load(fh)
     return d.get("claudeAiOauth", d)
 
 try:
