@@ -324,7 +324,9 @@
     },
     "anthropic_agent_allowlist": [
       "ltx",
-      "stl"
+      "stl",
+      "klod-access",
+      "klod-dispatch"
     ],
     "claude_cli_daily_budgets": {
       "career-bot": 20000000,
