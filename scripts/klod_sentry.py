@@ -17,6 +17,7 @@ online, порт 9093 не принимал соединения), агенты 
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import subprocess
@@ -143,6 +144,64 @@ def send_tg(text: str) -> None:
         pass
 
 
+# Срок OAuth-подписки Клода. refreshToken при обновлении НЕ продлевается, а войти
+# заново можно только с Windows под VPN: с smain claude.ai отдаёт challenge
+# Cloudflare. Если срок истечёт, Клод замолчит для всей федерации, и починить это
+# с сервера будет нельзя — поэтому напоминание идёт заранее и само, а не зависит
+# от того, работаем ли мы в этот день.
+CREDS_FILE = os.path.join(HOME, ".claude", ".credentials.json")
+CREDS_WARN_DAYS = int(os.environ.get("KLOD_SENTRY_CREDS_WARN_DAYS", "7"))
+CREDS_URGENT_DAYS = int(os.environ.get("KLOD_SENTRY_CREDS_URGENT_DAYS", "2"))
+# Путь к ярлыку на машине Бориса — он его сам туда положил, подсказываем дословно,
+# чтобы не вспоминать, где лежит и как называется.
+CREDS_SCRIPT = os.environ.get("KLOD_SENTRY_CREDS_SCRIPT",
+                              r"C:\Dev\klod-creds-sync-v1.cmd")
+
+
+def check_creds_expiry(st: dict, now: int) -> dict:
+    """Сколько осталось жить OAuth-подписке и пора ли напоминать Борису.
+
+    Напоминаем раз в сутки, когда до конца меньше CREDS_WARN_DAYS, и переходим на
+    настойчивый тон за CREDS_URGENT_DAYS. Чаще раза в сутки не пишем: ежечасное
+    напоминание о том, что нельзя сделать прямо сейчас, превращается в шум,
+    который перестают читать.
+    """
+    try:
+        with open(CREDS_FILE, encoding="utf-8-sig") as fh:
+            oauth = json.load(fh).get("claudeAiOauth") or {}
+        exp_ms = int(oauth.get("refreshTokenExpiresAt") or 0)
+    except Exception as e:
+        return {"service": "claude-creds", "ok": False,
+                "detail": f"не прочитал {CREDS_FILE}: {str(e)[:60]}"}
+    if exp_ms <= 0:
+        return {"service": "claude-creds", "ok": False,
+                "detail": "в файле нет refreshTokenExpiresAt"}
+
+    left_days = (exp_ms / 1000.0 - now) / 86400.0
+    when = datetime.datetime.fromtimestamp(exp_ms / 1000.0).strftime("%d.%m %H:%M")
+    detail = "refreshToken до %s (%.1f дн)" % (when, left_days)
+
+    if left_days > CREDS_WARN_DAYS:
+        return {"service": "claude-creds", "ok": True, "detail": detail}
+
+    # Одно напоминание в сутки на каждый оставшийся день: по мере приближения
+    # ключ меняется, поэтому письмо приходит снова, но не чаще раза в день.
+    tag = "creds-warn-%d" % int(max(0, left_days))
+    if st.get("creds_notify_tag") != tag:
+        st["creds_notify_tag"] = tag
+        urgent = left_days <= CREDS_URGENT_DAYS
+        head = ("СРОЧНО: вход Клода истекает через %.0f дн (%s)" % (left_days, when)
+                if urgent else
+                "Через %.0f дн истекает вход Клода (%s)" % (left_days, when))
+        send_tg(head + "\n\nПодними VPN и запусти " + CREDS_SCRIPT
+                + "\n\nЕсли скрипт скажет ПРОПУСК — сначала в claude выполни "
+                  "/logout и /login, потом запусти снова."
+                + ("\n\nПосле истечения Клод замолчит, и починить это с сервера "
+                   "будет нельзя." if urgent else ""))
+    return {"service": "claude-creds", "ok": left_days > CREDS_URGENT_DAYS,
+            "detail": detail}
+
+
 def _can_restart(st: dict, key: str, now: int) -> bool:
     hist = [t for t in st.get(f"{key}_restarts", []) if now - t < 86400]
     st[f"{key}_restarts"] = hist
@@ -174,11 +233,13 @@ def restart_dispatch(st: dict, now: int) -> str:
 def main() -> None:
     now = int(time.time())
     checks = [check_lineman(), check_keymaster(), check_dispatch()]
+    st_early = _load_state()
+    checks.append(check_creds_expiry(st_early, now))
     # Пробу «Клод реально отвечает» делаем, только когда шлюз жив: иначе она просто
     # повторит уже известный отказ и зря прождёт свой таймаут.
     if checks[0]["ok"]:
         checks.append(check_klod_answers())
-    st = _load_state()
+    st = st_early
     actions = []
 
     by_name = {c["service"]: c for c in checks}
