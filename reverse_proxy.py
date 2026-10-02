@@ -160,6 +160,55 @@ def _merge_anthropic_beta(existing: str, required: str = _OAUTH_BETA_FLAG) -> st
     return ", ".join(parts)
 
 
+# Обязательная «визитка» Claude Code в system для OAuth-запросов.
+#
+# Токен подписки обслуживает запросы, которые выглядят как Claude Code. Клиенты,
+# которые шлют свой системный промпт (openclaw-агент, внешние интеграции), без неё
+# устойчиво получают rate_limit_error там, где тот же запрос с визиткой проходит:
+# замер 2026-10-01 — агент на sdev получил 5 отказов подряд, прямая проба с визиткой
+# в те же минуты отвечала 200.
+#
+# Подставляем здесь, рядом с токеном, а не в каждом клиенте: Lineman единственный,
+# кто знает про OAuth-требования, и так совместимость получают все разом. Клиенту
+# своё system сохраняем — визитка встаёт первым блоком, не затирая его.
+ANTHROPIC_OAUTH_CARD = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
+def ensure_oauth_system_card(body: bytes) -> bytes:
+    """Добавить визитку первым блоком system. Тело не меняется, если она уже есть.
+
+    Формат system у Anthropic двоякий: строка или список блоков. Поддерживаем оба,
+    иначе клиент со строковым system потерял бы свой промпт при подстановке.
+    """
+    if not body:
+        return body
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return body                      # не JSON — не наше дело
+    if not isinstance(data, dict):
+        return body
+
+    system = data.get("system")
+    card = {"type": "text", "text": ANTHROPIC_OAUTH_CARD}
+
+    if isinstance(system, str):
+        if ANTHROPIC_OAUTH_CARD in system:
+            return body
+        data["system"] = [card, {"type": "text", "text": system}]
+    elif isinstance(system, list):
+        for blk in system:
+            if isinstance(blk, dict) and ANTHROPIC_OAUTH_CARD in str(blk.get("text", "")):
+                return body
+        data["system"] = [card] + system
+    elif system is None:
+        data["system"] = [card]
+    else:
+        return body                      # неизвестная форма — не трогаем
+
+    return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+
 def maybe_inject_anthropic_oauth(
     provider: str,
     agent_name: str | None,
@@ -1203,6 +1252,19 @@ async def handle_reverse_proxy(
     _oauth_status = maybe_inject_anthropic_oauth(
         provider, agent_name, fwd_headers, config)
     if _oauth_status == "injected":
+        # Вместе с токеном подставляем визитку: без неё подписочный OAuth
+        # устойчиво отвечает отказом по лимиту клиентам со своим системным
+        # промптом (openclaw-агент на sdev, 2026-10-01).
+        #
+        # content-length переставляем ОБЯЗАТЕЛЬНО: он выставлен выше по старой
+        # длине, и расхождение рвёт соединение ещё до ответа Anthropic — клиент
+        # видит «network connection error» и гадает про сеть.
+        _before = len(req_body)
+        req_body = ensure_oauth_system_card(req_body)
+        if len(req_body) != _before:
+            fwd_headers["content-length"] = str(len(req_body))
+            logger.info("anthropic_system_card_added", agent=agent_name,
+                        bytes_added=len(req_body) - _before)
         logger.info("anthropic_oauth_injected", agent=agent_name)
     elif _oauth_status == "no_token":
         logger.warning("anthropic_oauth_missing", agent=agent_name)
