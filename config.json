@@ -326,7 +326,10 @@
       "ltx",
       "stl",
       "klod-access",
-      "klod-dispatch"
+      "klod-dispatch",
+      "rag-guard",
+      "keymaster-guard",
+      "fed-backup"
     ],
     "claude_cli_daily_budgets": {
       "career-bot": 20000000,
