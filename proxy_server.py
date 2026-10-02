@@ -35,6 +35,7 @@ from reverse_proxy import handle_reverse_proxy
 from circuit_breaker import CircuitBreaker
 import klod_ask
 import portal_cards
+import fedrag_notes
 from dedup_cache import DedupCache
 from fedrag_proxy import FedRagProxy
 from tg_miniapp import validate_init_data, user_id_allowed
@@ -254,6 +255,8 @@ class ProxyServer:
         "/api/tg/send": "POST",
         "/api/sms/message": "POST",
         "/api/fedrag/stats": "GET",
+        "/api/fedrag/note": "POST",
+        "/api/fedrag/notes": "GET",
         "/api/portal/agents": "GET",
         "/api/keymaster/leak_alert": "POST",
         "/api/login": "POST",
@@ -716,6 +719,39 @@ class ProxyServer:
                 logger.info("portal_card_upsert",
                             agent=str(payload.get("agent_id"))[:40], status=code)
                 self._send_simple_and_close(wr, code, body)
+                await wr.drain()
+                wr.close()
+                return
+            # Заметки агентов в индекс: закрытое «не знаю» не должно повторяться
+            # (решение Бориса 2026-10-02). Гейт секретов стоит ДО записи — заметку
+            # пишет тот, кто только что копался в проблеме и мог прихватить значение
+            # из конфига или вывода команды.
+            elif request_path_only == "/api/fedrag/note" and method == "POST":
+                headers = await self._read_headers(rd)
+                clen = int(headers.get("content-length", "0") or "0")
+                raw = await asyncio.wait_for(
+                    rd.read(min(clen, 65536)), timeout=15) if clen > 0 else b""
+                try:
+                    payload = json.loads(raw or b"{}")
+                except Exception:
+                    self._send_simple_and_close(wr, 400, {"error": "тело не JSON"})
+                    await wr.drain(); wr.close(); return
+                if not isinstance(payload, dict):
+                    self._send_simple_and_close(wr, 400, {"error": "ожидался объект"})
+                    await wr.drain(); wr.close(); return
+                payload.setdefault("agent",
+                                   headers.get("x-agent-name") or "unknown")
+                code, body_out = fedrag_notes.save_note(payload)
+                logger.info("fedrag_note", agent=str(payload.get("agent"))[:40],
+                            status=code, title=str(payload.get("title"))[:60])
+                self._send_simple_and_close(wr, code, body_out)
+                await wr.drain()
+                wr.close()
+                return
+            elif request_path_only == "/api/fedrag/notes" and method == "GET":
+                await self._drain_headers(rd)
+                self._send_simple_and_close(
+                    wr, 200, {"notes": fedrag_notes.list_notes()})
                 await wr.drain()
                 wr.close()
                 return
