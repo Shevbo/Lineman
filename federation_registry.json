@@ -11,7 +11,7 @@
       "own_repo": false,
       "git_remote": null,
       "node": "smain",
-      "desc": "",
+      "desc": "ЗАПАРКОВАН с 2026-10-03: проект законсервирован решением Бориса. На hoster остановлены PM2 eschool-bot и eschool-web, отключён cron-healthcheck бота (в crontab закомментирован, не удалён). Код ~/apps/eschool, токен SHECTORYESCHOOLBOT_TOKEN в Ключнике и каталог workspaces/eshkola на smain сохранены. Тревоги ALERT eschool-bot больше не ждать. Расконсервация: pm2 start eschool-bot eschool-web и вернуть строку cron на hoster.",
       "keywords": [
         "eshkola",
         "школ",
