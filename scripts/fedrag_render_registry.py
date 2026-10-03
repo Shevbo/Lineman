@@ -10,11 +10,20 @@
     python3 fedrag_render_registry.py <каталог-назначения>
 
 Секреты: из config.json берётся ТОЛЬКО agents.node_map. Секции proxy_pool, upstreams
-и любые credentials не читаются и не выводятся.
+и любые credentials не читаются и не выводятся. Этого оказалось НЕ достаточно: значение
+секрета приехало в реестр через поле desc компонента (sms-gateway, адрес LAN-шлюза), и
+гейт Ключника выбросил federation_registry.md из корпуса. Файл исчез из индекса молча,
+recall упал 0.867 -> 0.800, перестал находиться даже ответ «кто отвечает за бэкапы».
+Поэтому каждый готовый текст теперь проверяется Ключником ПЕРЕД записью: помеченный
+файл не пишется вовсе, и это видно сразу здесь, а не через потерю в поиске.
 """
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
+
+KEYMASTER = os.environ.get("KEYMASTER_URL", "http://127.0.0.1:9093")
 
 LINEMAN = os.path.expanduser("~/workspaces/infra/lineman")
 
@@ -26,6 +35,32 @@ def load(path):
     except (OSError, ValueError) as exc:
         print("  пропуск %s: %s" % (path, exc), file=sys.stderr)
         return None
+
+
+def secret_free(text, label):
+    """Отдать текст Ключнику и сказать, можно ли его писать.
+
+    Недоступный Ключник трактуется как ОТКАЗ, не как «чисто»: «не смог проверить» не
+    равно «проверено» — то же правило, что в гейте синка корпуса.
+    """
+    try:
+        req = urllib.request.Request(
+            KEYMASTER + "/keymaster/scan",
+            data=json.dumps({"text": text}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            flagged = json.loads(resp.read()).get("flagged") or []
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print("  ОТКАЗ %s: Ключник недоступен (%s) — не смог проверить, значит не пишу"
+              % (label, str(exc)[:80]), file=sys.stderr)
+        return False
+    if flagged:
+        names = sorted({n for f in flagged for n in (f.get("names") or [])})
+        print("  ОТКАЗ %s: внутри значения секретов %s. Замени на '<спроси Ключника: ИМЯ>' "
+              "в исходном реестре." % (label, ", ".join(names) or "?"), file=sys.stderr)
+        return False
+    return True
 
 
 def render_node_map(cfg):
@@ -111,7 +146,7 @@ def main():
     cfg = load(os.path.join(LINEMAN, "config.json"))
     if cfg:
         text = render_node_map(cfg)
-        if text:
+        if text and secret_free(text, "federation_node_map.md"):
             with open(os.path.join(dest, "federation_node_map.md"), "w", encoding="utf-8") as fh:
                 fh.write(text)
             written += 1
@@ -120,7 +155,7 @@ def main():
     reg = load(os.path.join(LINEMAN, "federation_registry.json"))
     if reg:
         text = render_registry(reg)
-        if text:
+        if text and secret_free(text, "federation_registry.md"):
             with open(os.path.join(dest, "federation_registry.md"), "w", encoding="utf-8") as fh:
                 fh.write(text)
             written += 1

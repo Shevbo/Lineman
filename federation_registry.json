@@ -27,7 +27,7 @@
       "own_repo": false,
       "git_remote": null,
       "node": "smain",
-      "desc": "",
+      "desc": "Принципиал бэкапов федерации (FEDBACKUP). С 2026-10-02 автономный агент в openclaw на sdev (модель Sonnet), просыпается будильником fedbackup_wake.py в 03:30 и 15:30. Данные, скрипт federation-backup.sh, логи и inbox остались на smain. Охват бэкапа правит сам; восстановление, удаление снапшотов и глубину хранения решает только Борис. Писать ему о новых постоянных ресурсах: POST /api/agent/fed-backup/message?from=<agent_id>, news event=backup-new-resource|backup-arch-change|backup-gap. Операторское хранилище (бэкап Windows-dev и выкачка в S:) — у окна maintenance-vsc.",
       "keywords": [
         "backup",
         "fed",
@@ -37,7 +37,13 @@
         "бэкап",
         "восстановлен",
         "резервн",
-        "снапшот"
+        "снапшот",
+        "sdev",
+        "автоном",
+        "покрытие",
+        "охват",
+        "offsite",
+        "drive"
       ]
     },
     {
@@ -842,7 +848,7 @@
       "path": "/home/shectory/bin/send-sms.sh",
       "own_repo": false,
       "node": "smain",
-      "desc": "Android-шлюз в LAN shevbo-pi (192.168.1.128:8080, Local Server mode). Единый канал критичных SMS-алертов Боре и OTP. Использовать через ~/bin/send-sms.sh (POST + poll state=Delivered). Приоритет consumers: stl (migrated 2026-08-05), garden-manager-app (pending).",
+      "desc": "Android-шлюз в LAN shevbo-pi (<спроси Ключника: SMSGATEWAY_LOCAL_SERVER>, Local Server mode). Единый канал критичных SMS-алертов Боре и OTP. Использовать через ~/bin/send-sms.sh (POST + poll state=Delivered). Приоритет consumers: stl (migrated 2026-08-05), garden-manager-app (pending).",
       "keywords": [
         "sms",
         "gateway",

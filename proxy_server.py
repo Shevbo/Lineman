@@ -48,6 +48,33 @@ logger = structlog.get_logger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 
 
+
+async def _read_body_exact(
+    rd: asyncio.StreamReader, content_length: int, cap: int
+) -> bytes:
+    """Прочитать тело запроса ЦЕЛИКОМ, а не сколько успело прийти.
+
+    `StreamReader.read(n)` возвращает до n байт — то есть содержимое первого
+    пришедшего TCP-сегмента. Все bodyful-ручки Lineman читали тело именно так, и
+    запрос крупнее сегмента обрезался молча: письмо rag-shectory 52694 в inbox
+    Клода потеряло половину текста на 1000 байтах, а `decode(errors="replace")`
+    дописал U+FFFD, из-за чего обрез выглядел как особенность текста, а не как
+    потеря. Найдено 2026-10-03 при разборе незакрытого вопроса из того письма.
+
+    Больше `cap` не читаем: ручки отвечают и закрывают соединение, поэтому
+    недочитанный хвост никому не мешает, а память ограничена осознанно.
+    """
+    want = min(content_length, cap)
+    if want <= 0:
+        return b""
+    try:
+        return await rd.readexactly(want)
+    except asyncio.IncompleteReadError as exc:
+        # Клиент закрыл соединение раньше, чем отдал обещанный Content-Length.
+        # Отдаём что есть: ручка решит сама, валиден ли такой запрос.
+        return exc.partial
+
+
 def build_builder_status(tickets: list, audit: list) -> dict:
     """Шейп данных klod-builder для дашборда: сводка по статусам + тикеты (новые сверху)."""
     summary: dict[str, int] = {}
@@ -706,7 +733,7 @@ class ProxyServer:
                 headers = await self._read_headers(rd)
                 clen = int(headers.get("content-length", "0") or "0")
                 raw = await asyncio.wait_for(
-                    rd.read(min(clen, 16384)), timeout=10) if clen > 0 else b""
+                    _read_body_exact(rd, clen, 16384), timeout=10) if clen > 0 else b""
                 try:
                     payload = json.loads(raw or b"{}")
                 except Exception:
@@ -730,7 +757,7 @@ class ProxyServer:
                 headers = await self._read_headers(rd)
                 clen = int(headers.get("content-length", "0") or "0")
                 raw = await asyncio.wait_for(
-                    rd.read(min(clen, 65536)), timeout=15) if clen > 0 else b""
+                    _read_body_exact(rd, clen, 65536), timeout=15) if clen > 0 else b""
                 try:
                     payload = json.loads(raw or b"{}")
                 except Exception:
@@ -1097,7 +1124,7 @@ class ProxyServer:
         body_bytes = b""
         if content_length > 0:
             body_bytes = await asyncio.wait_for(
-                rd.read(min(content_length, 65536)), timeout=10
+                _read_body_exact(rd, content_length, 65536), timeout=10
             )
 
         status = 200
@@ -1248,7 +1275,7 @@ class ProxyServer:
                 content_length = 0
             if content_length > 0:
                 body_bytes = await asyncio.wait_for(
-                    rd.read(min(content_length, 65536)), timeout=10
+                    _read_body_exact(rd, content_length, 65536), timeout=10
                 )
                 ctype = req_headers.get("content-type", "").lower()
                 if "application/json" in ctype:
@@ -1495,7 +1522,7 @@ class ProxyServer:
         body_bytes = b""
         if content_length > 0:
             body_bytes = await asyncio.wait_for(
-                rd.read(min(content_length, 65536)), timeout=10
+                _read_body_exact(rd, content_length, 65536), timeout=10
             )
 
         url = urlparse(request_path)
@@ -1667,7 +1694,7 @@ class ProxyServer:
         content_length = int(headers.get("content-length", "0") or "0")
         if content_length > 0:
             body = await asyncio.wait_for(
-                rd.read(min(content_length, 256 * 1024)), timeout=10
+                _read_body_exact(rd, content_length, 256 * 1024), timeout=10
             )
 
         parsed = urlparse(request_path)
@@ -1749,7 +1776,7 @@ class ProxyServer:
                 k, v = decoded.split(": ", 1)
                 headers[k.lower()] = v
         cl = int(headers.get("content-length", "0") or "0")
-        body = await asyncio.wait_for(rd.read(min(cl, 16384)), timeout=10) if cl > 0 else b""
+        body = await asyncio.wait_for(_read_body_exact(rd, cl, 16384), timeout=10) if cl > 0 else b""
         try:
             d = json.loads(body) if body else {}
             from secret_leak_alert import report_leak
@@ -1954,7 +1981,7 @@ class ProxyServer:
         body_bytes = b""
         if content_length > 0:
             body_bytes = await asyncio.wait_for(
-                rd.read(min(content_length, 65536)), timeout=10
+                _read_body_exact(rd, content_length, 65536), timeout=10
             )
 
         try:
@@ -2321,7 +2348,7 @@ class ProxyServer:
         body_bytes = b""
         if content_length > 0:
             body_bytes = await asyncio.wait_for(
-                rd.read(min(content_length, 32768)), timeout=10
+                _read_body_exact(rd, content_length, 32768), timeout=10
             )
 
         text, phones, err = self._sms_parse_body(body_bytes)
@@ -2410,7 +2437,7 @@ class ProxyServer:
         body_bytes = b""
         if content_length > 0:
             body_bytes = await asyncio.wait_for(
-                rd.read(min(content_length, 65536)), timeout=10
+                _read_body_exact(rd, content_length, 65536), timeout=10
             )
 
         status = 200
@@ -2475,7 +2502,7 @@ class ProxyServer:
         body_bytes = b""
         if content_length > 0:
             body_bytes = await asyncio.wait_for(
-                rd.read(min(content_length, 65536)), timeout=10
+                _read_body_exact(rd, content_length, 65536), timeout=10
             )
 
         agent = (headers.get("x-agent-name")
@@ -2832,7 +2859,7 @@ class ProxyServer:
                 k, v = d.split(": ", 1)
                 headers[k.lower()] = v
         clen = int(headers.get("content-length", "0") or "0")
-        body = await asyncio.wait_for(rd.read(min(clen, 65536)), timeout=10) if clen > 0 else b""
+        body = await asyncio.wait_for(_read_body_exact(rd, clen, 65536), timeout=10) if clen > 0 else b""
 
         url = urlparse(request_path)
         qs = parse_qs(url.query)
@@ -2878,7 +2905,7 @@ class ProxyServer:
         тикет уже с контекстом и попытается выполнить."""
         headers = await self._read_headers(rd)
         clen = int(headers.get("content-length", "0") or "0")
-        raw = await asyncio.wait_for(rd.read(min(clen, 65536)), timeout=10) if clen > 0 else b""
+        raw = await asyncio.wait_for(_read_body_exact(rd, clen, 65536), timeout=10) if clen > 0 else b""
         try:
             body = json.loads(raw) if raw else {}
         except Exception:
@@ -2924,7 +2951,7 @@ class ProxyServer:
         headers = await self._read_headers(rd)
         clen = int(headers.get("content-length", "0") or "0")
         raw = await asyncio.wait_for(
-            rd.read(min(clen, 65536)), timeout=15
+            _read_body_exact(rd, clen, 65536), timeout=15
         ) if clen > 0 else b""
         try:
             body = json.loads(raw) if raw else {}
@@ -3188,7 +3215,7 @@ class ProxyServer:
         headers = await self._read_headers(rd)
         clen = int(headers.get("content-length", "0") or "0")
         raw = await asyncio.wait_for(
-            rd.read(min(clen, 262144)), timeout=15
+            _read_body_exact(rd, clen, 262144), timeout=15
         ) if clen > 0 else b""
         try:
             body = json.loads(raw) if raw else {}
@@ -3414,7 +3441,7 @@ class ProxyServer:
         from urllib.parse import urlparse
         headers = await self._read_headers(rd)
         clen = int(headers.get("content-length", "0") or "0")
-        raw = await asyncio.wait_for(rd.read(min(clen, 65536)), timeout=10) if clen > 0 else b""
+        raw = await asyncio.wait_for(_read_body_exact(rd, clen, 65536), timeout=10) if clen > 0 else b""
         path = urlparse(request_path).path.rstrip("/") or "/api/backlog"
         try:
             body = json.loads(raw) if raw else {}
@@ -3570,7 +3597,7 @@ class ProxyServer:
         from gemini_pro import get_grants
         headers = await self._read_headers(rd)
         clen = int(headers.get("content-length", "0") or "0")
-        raw = await asyncio.wait_for(rd.read(min(clen, 65536)), timeout=10) if clen > 0 else b""
+        raw = await asyncio.wait_for(_read_body_exact(rd, clen, 65536), timeout=10) if clen > 0 else b""
         path = urlparse(request_path).path.rstrip("/") or "/api/gemini-pro"
         try:
             body = json.loads(raw) if raw else {}
@@ -3915,7 +3942,7 @@ class ProxyServer:
         на успехе ставит HttpOnly cookie shectory_session (HMAC). Без Basic popup."""
         headers = await self._read_headers(rd)
         clen = int(headers.get("content-length", "0") or "0")
-        raw = await asyncio.wait_for(rd.read(min(clen, 8192)), timeout=10) if clen > 0 else b""
+        raw = await asyncio.wait_for(_read_body_exact(rd, clen, 8192), timeout=10) if clen > 0 else b""
         try:
             data = json.loads(raw or b"{}")
             email = str(data.get("email", "")).strip()
@@ -3967,7 +3994,7 @@ class ProxyServer:
         SameSite=None — миниаппа живёт во webview Telegram (third-party контекст)."""
         headers = await self._read_headers(rd)
         clen = int(headers.get("content-length", "0") or "0")
-        raw = await asyncio.wait_for(rd.read(min(clen, 8192)), timeout=10) if clen > 0 else b""
+        raw = await asyncio.wait_for(_read_body_exact(rd, clen, 8192), timeout=10) if clen > 0 else b""
         try:
             data = json.loads(raw or b"{}")
             init_data = str(data.get("initData", ""))
