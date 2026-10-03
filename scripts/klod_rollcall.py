@@ -23,6 +23,7 @@ import os
 import sqlite3
 import subprocess
 import time
+from datetime import datetime
 import urllib.request
 
 HOME = os.path.expanduser("~")
@@ -147,9 +148,15 @@ def check_inbox_answers(report: list, actions: list) -> None:
     for m in msgs:
         if str(m.get("from", "")).lower() in SIGNAL_SENDERS:
             continue
-        ts = m.get("ts") or m.get("timestamp") or 0
+        # ts в inbox это ISO-строка с таймзоной, а не эпоха. Раньше стояло float(ts): оно
+        # падало на КАЖДОМ письме, цикл молча пропускал всё, и проверка «Клод молчит»
+        # всегда писала «без зависших» — зелёная лампа, за которой ничего не стояло.
+        raw_ts = m.get("ts") or m.get("timestamp") or 0
         try:
-            ts = float(ts)
+            if isinstance(raw_ts, (int, float)):
+                ts = float(raw_ts)
+            else:
+                ts = datetime.fromisoformat(str(raw_ts)).timestamp()
         except (TypeError, ValueError):
             continue
         age_min = (now - ts) / 60
